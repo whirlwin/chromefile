@@ -1,0 +1,5 @@
+version: 1
+hotkeys:
+  tab.next: Shift+Alt+F12
+  tab.previous:
+    linux: Ctrl+Alt+Shift+Comma

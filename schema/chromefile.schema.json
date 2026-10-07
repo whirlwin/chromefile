@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/whirlwin/chromefile/main/schema/chromefile.schema.json",
+  "title": "Chromefile",
+  "description": "Declarative desired state for Google Chrome and Chromium-based browsers. See https://github.com/whirlwin/chromefile/blob/main/SPEC.md",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "Chromefile specification version this file conforms to. Tools must refuse versions they do not support.",
+      "const": 1
+    },
+    "tabs": {
+      "description": "Tab strip settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "layout": {
+          "description": "Where the tab strip is shown. vertical: along the side of the window. horizontal: across the top of the window.",
+          "enum": ["vertical", "horizontal"]
+        }
+      }
+    },
+    "hotkeys": {
+      "description": "Keyboard shortcuts. Keys are action names from the action registry, values are key combinations (or a per-platform mapping). An empty string means the action has no hotkey.",
+      "type": "object",
+      "propertyNames": {
+        "description": "Action name from the action registry.",
+        "enum": ["tab.next", "tab.previous"]
+      },
+      "additionalProperties": false,
+      "properties": {
+        "tab.next": {
+          "description": "Activate the tab after the active one in tab strip order (below in vertical layout, to the right in horizontal layout), wrapping from last to first, within the current window.",
+          "$ref": "#/$defs/hotkey"
+        },
+        "tab.previous": {
+          "description": "Activate the tab before the active one in tab strip order (above in vertical layout, to the left in horizontal layout), wrapping from first to last, within the current window.",
+          "$ref": "#/$defs/hotkey"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "combo": {
+      "description": "Key combination: one or more modifiers (Command, Ctrl, Alt, Shift, MacCtrl) joined with '+', then exactly one key, for example Command+J or Ctrl+Shift+Y. At least one modifier other than Shift is required, no modifier may repeat, and Command and Ctrl must not be combined. An empty string means no hotkey.",
+      "type": "string",
+      "pattern": "^(?:|(?=(?:.*\\+)?(?:Command|Ctrl|Alt|MacCtrl)\\+)(?!(?:.*\\+)?Command\\+(?:.*\\+)?Command\\+)(?!(?:.*\\+)?Ctrl\\+(?:.*\\+)?Ctrl\\+)(?!(?:.*\\+)?Alt\\+(?:.*\\+)?Alt\\+)(?!(?:.*\\+)?Shift\\+(?:.*\\+)?Shift\\+)(?!(?:.*\\+)?MacCtrl\\+(?:.*\\+)?MacCtrl\\+)(?!(?:.*\\+)?Command\\+(?:.*\\+)?Ctrl\\+)(?!(?:.*\\+)?Ctrl\\+(?:.*\\+)?Command\\+)(?:(?:Command|Ctrl|Alt|Shift|MacCtrl)\\+){1,4}(?:[A-Z0-9]|Comma|Period|Home|End|PageUp|PageDown|Space|Insert|Delete|Up|Down|Left|Right|F(?:[1-9]|1[0-2])))$"
+    },
+    "hotkey": {
+      "description": "A key combination for every platform, or a mapping from platform (mac, windows, linux, default) to key combination.",
+      "oneOf": [
+        { "$ref": "#/$defs/combo" },
+        {
+          "description": "Per-platform key combinations. 'default' applies to platforms not listed.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "mac": { "description": "Key combination on macOS.", "$ref": "#/$defs/combo" },
+            "windows": { "description": "Key combination on Windows.", "$ref": "#/$defs/combo" },
+            "linux": { "description": "Key combination on Linux.", "$ref": "#/$defs/combo" },
+            "default": { "description": "Key combination on platforms not listed.", "$ref": "#/$defs/combo" }
+          }
+        }
+      ]
+    }
+  }
+}

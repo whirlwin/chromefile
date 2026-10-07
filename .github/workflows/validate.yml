@@ -1,0 +1,38 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      SCHEMA: schema/chromefile.schema.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Schema is valid JSON Schema 2020-12
+        run: pipx run check-jsonschema --check-metaschema "$SCHEMA"
+
+      - name: Example and valid fixtures pass
+        run: pipx run check-jsonschema --schemafile "$SCHEMA" --default-filetype yaml Chromefile tests/valid/*.yaml
+
+      - name: Invalid fixtures fail
+        run: |
+          status=0
+          for f in tests/invalid/*.yaml; do
+            if pipx run check-jsonschema --schemafile "$SCHEMA" "$f" > /dev/null 2>&1; then
+              echo "::error file=$f::expected validation to fail, but it passed"
+              status=1
+            else
+              echo "fails as expected: $f"
+            fi
+          done
+          exit "$status"
+
+      - name: Lint YAML
+        run: pipx run yamllint Chromefile tests/valid .github

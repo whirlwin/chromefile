@@ -1,0 +1,4 @@
+version: 1
+hotkeys:
+  tab.next:
+    chromeos: Ctrl+J

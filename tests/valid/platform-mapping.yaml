@@ -1,0 +1,8 @@
+version: 1
+tabs:
+  layout: horizontal
+hotkeys:
+  tab.next:
+    mac: MacCtrl+Shift+Down
+    default: Ctrl+Shift+PageDown
+  tab.previous: ""

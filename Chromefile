@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/whirlwin/chromefile/main/schema/chromefile.schema.json
+version: 1
+
+tabs:
+  layout: vertical          # vertical | horizontal
+
+hotkeys:
+  tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around
+  tab.previous: Command+K

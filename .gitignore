@@ -1,1 +1,7 @@
 cli/target
+node_modules/
+dist/
+.DS_Store
+*.zip
+*.crx
+*.pem

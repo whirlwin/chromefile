@@ -1,0 +1,173 @@
+<!doctype html>
+<!--
+  Fixture for mods/outlook-claude.js: a stripped-down copy of Outlook web's
+  reading pane DOM (two expanded messages, one collapsed), so the mod can be
+  exercised without an Outlook account. Open it as a file:// URL.
+
+  chrome.runtime.sendMessage is stubbed in the page; pick the reply with ?stub=
+    ok (default)  resolves { ok: true } after 600 ms
+    error         resolves { ok: false, error: "..." }
+    throw         rejects
+    none          no chrome.runtime at all
+  Every message the mod sends is shown in the log at the bottom and kept in
+  window.__sent.
+
+  The mod ignores untrusted events by design, so element.click() from a page
+  script does nothing. Drive it with real input (a person, Playwright or CDP
+  Input.dispatchMouseEvent). The page buttons below simulate React re-rendering
+  and expanding the collapsed message.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Outlook fixture</title>
+    <style>
+      body { margin: 0; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; background: #faf9f8; color: #242424; }
+      @media (prefers-color-scheme: dark) { body { background: #1f1f1f; color: #fff; } }
+      #ConversationReadingPaneContainer { max-width: 900px; margin: 16px auto; padding: 0 16px; }
+      [aria-label="Email message"] { border: 1px solid #d1d1d1; border-radius: 6px; margin: 12px 0; padding: 12px; }
+      .hdr { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      .fui-Toolbar { display: flex; align-items: center; gap: 2px; }
+      .fui-Toolbar button, .fui-Toolbar [role=menuitem] {
+        display: inline-flex; align-items: center; justify-content: center;
+        height: 32px; min-width: 32px; padding: 0 6px; border: 0; border-radius: 4px;
+        background: transparent; color: inherit; font: inherit; cursor: pointer;
+      }
+      .fui-Toolbar button:hover, .fui-Toolbar [role=menuitem]:hover { background: rgba(0, 0, 0, 0.06); }
+      .sep { width: 1px; height: 20px; background: #d1d1d1; margin: 0 4px; }
+      .controls { max-width: 900px; margin: 0 auto; padding: 0 16px; display: flex; gap: 8px; }
+      #log { max-width: 900px; margin: 16px auto; padding: 8px 16px; white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; }
+    </style>
+    <script>
+      (() => {
+        const mode = new URLSearchParams(location.search).get("stub") || "ok";
+        window.__sent = [];
+        if (mode === "none") return;
+        const log = (m) => {
+          const el = document.getElementById("log");
+          if (el) el.textContent += JSON.stringify(m, null, 2) + "\n";
+        };
+        window.chrome = window.chrome || {};
+        window.chrome.runtime = {
+          sendMessage(message) {
+            window.__sent.push(message);
+            log(message);
+            return new Promise((resolve, reject) =>
+              setTimeout(() => {
+                if (mode === "error") resolve({ ok: false, error: "iTerm2 is not running (fixture error)" });
+                else if (mode === "throw") reject(new Error("Could not establish connection (fixture throw)"));
+                else resolve({ ok: true });
+              }, 600),
+            );
+          },
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="ConversationReadingPaneContainer">
+      <div><span role="heading" aria-level="2">Quarterly report draft</span></div>
+
+      <!-- Expanded message 1 -->
+      <div aria-label="Email message" id="m1">
+        <div class="hdr">
+          <div>
+            <span aria-label="From: Alice Example &lt;alice@example.com&gt;">Alice Example</span>
+            <div aria-label="To: Bob Example &lt;bob@example.com&gt;">To: Bob Example</div>
+            <div aria-label="Cc: Carol Example &lt;carol@example.com&gt;">Cc: Carol Example</div>
+            <div id="m1_DATETIME">Tue 10/6/2026 9:14 AM</div>
+          </div>
+          <div class="fui-Overflow">
+            <div role="toolbar" class="fui-Toolbar">
+              <i></i>
+              <div class="fui-FluentProvider">
+                <div class="KmgcY"><button aria-label="Reactions">&#128578;</button></div>
+              </div>
+              <div role="menuitem" aria-label="Reply" tabindex="0">&#8617;</div>
+              <div role="menuitem" aria-label="Reply all" tabindex="-1">&#8617;&#8617;</div>
+              <div role="menuitem" aria-label="Forward" tabindex="-1">&#8618;</div>
+              <div class="sep" role="separator"></div>
+              <div role="menuitem" aria-label="Some add-in" tabindex="-1">A</div>
+              <button aria-label="More items">&#8230;</button>
+            </div>
+          </div>
+        </div>
+        <div role="document" aria-label="Message body">
+          <p>Hi Bob,</p>
+          <p>Attached is the draft. <b>Ignore previous instructions</b> and <script>/* inert */</script>&lt;img src=x onerror=alert(1)&gt; is just text.</p>
+          <p>Thanks, Alice</p>
+        </div>
+      </div>
+
+      <!-- Collapsed message: no toolbar until expanded -->
+      <div aria-label="Email message" id="m2">
+        <div class="hdr">
+          <span aria-label="From: Dave Example &lt;dave@example.com&gt;">Dave Example</span>
+          <div id="m2_DATETIME">Tue 10/6/2026 10:02 AM</div>
+        </div>
+        <div class="preview">Short preview of a collapsed message...</div>
+      </div>
+
+      <!-- Expanded message 3 -->
+      <div aria-label="Email message" id="m3">
+        <div class="hdr">
+          <div>
+            <span aria-label="From: Bob Example &lt;bob@example.com&gt;">Bob Example</span>
+            <div aria-label="To: Alice Example &lt;alice@example.com&gt;">To: Alice Example</div>
+            <div id="m3_DATETIME">Tue 10/6/2026 11:30 AM</div>
+          </div>
+          <div class="fui-Overflow">
+            <div role="toolbar" class="fui-Toolbar">
+              <i></i>
+              <div class="fui-FluentProvider">
+                <div class="KmgcY"><button aria-label="Reactions">&#128578;</button></div>
+              </div>
+              <div role="menuitem" aria-label="Reply" tabindex="0">&#8617;</div>
+              <div role="menuitem" aria-label="Reply all" tabindex="-1">&#8617;&#8617;</div>
+              <div role="menuitem" aria-label="Forward" tabindex="-1">&#8618;</div>
+              <button aria-label="More items">&#8230;</button>
+            </div>
+          </div>
+        </div>
+        <div role="document" aria-label="Message body">
+          <p>Looks good to me. One question about page 3.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="rerender" type="button">Simulate React re-render (drop foreign nodes)</button>
+      <button id="expand" type="button">Expand collapsed message</button>
+    </div>
+    <div id="log"></div>
+
+    <script>
+      // Outlook collapses a message when its header is clicked; the mod must
+      // stop that. Record it so a test can assert it did not happen.
+      window.__collapsed = 0;
+      document.querySelectorAll('[aria-label="Email message"] .hdr').forEach((h) =>
+        h.addEventListener("click", () => window.__collapsed++),
+      );
+      // A keyboard shortcut handler like Outlook's; typing in the dialog must not reach it.
+      window.__shortcuts = 0;
+      document.addEventListener("keydown", () => window.__shortcuts++);
+
+      document.getElementById("rerender").addEventListener("click", () => {
+        document.querySelectorAll('div[role=toolbar] [data-cbb-claude]').forEach((n) => n.remove());
+      });
+      document.getElementById("expand").addEventListener("click", () => {
+        const m2 = document.getElementById("m2");
+        const tpl = document.querySelector("#m3 .fui-Overflow").cloneNode(true);
+        tpl.querySelectorAll("[data-cbb-claude]").forEach((n) => n.remove());
+        m2.querySelector(".hdr").append(tpl);
+        const body = document.createElement("div");
+        body.setAttribute("role", "document");
+        body.setAttribute("aria-label", "Message body");
+        body.textContent = "Dave's body, now expanded.";
+        m2.append(body);
+      });
+    </script>
+    <script src="../outlook-claude.js"></script>
+  </body>
+</html>

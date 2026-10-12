@@ -1,0 +1,21 @@
+# Chrome preferences, by their internal name (the keys chrome://settings changes).
+# List them with: scripts/chrome-apply.sh --list-settings [filter]
+settings:
+  vertical_tabs.enabled: true
+
+# Extension keyboard shortcuts: extension name, then command name.
+shortcuts:
+  Claude Browser Bridge:
+    select-next-tab: Command+J
+    select-previous-tab: Command+K
+
+# Claude Code sessions spawned from the browser (e.g. the Outlook button).
+claude:
+  cwd: ~/git
+
+# Mods: user scripts registered through the bridge, kept in mods/.
+mods:
+  outlook-claude:
+    matches: ["https://outlook.cloud.microsoft/*"]
+    file: mods/outlook-claude.js
+    # runAt: document_idle   (optional; world defaults to USER_SCRIPT)

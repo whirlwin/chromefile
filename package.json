@@ -1,0 +1,17 @@
+{
+  "name": "claude-browser-bridge",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "extension",
+    "host"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces --if-present",
+    "lint": "npm run lint --workspaces"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

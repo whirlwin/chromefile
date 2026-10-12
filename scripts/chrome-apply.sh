@@ -88,9 +88,23 @@ cleanup() {
     osascript - "${t%%:*}" "${t##*:}" > /dev/null 2>&1 << 'EOF' || true
 on run argv
   tell application "Google Chrome"
-    close (tab id ((item 2 of argv) as integer) of window id ((item 1 of argv) as integer))
+    close my findTab(item 1 of argv, item 2 of argv)
   end tell
 end run
+-- Window and tab ids can exceed the AppleScript integer range (2^29), where
+-- `as integer` turns them into reals that match nothing, so compare them as text.
+on findTab(wid, tid)
+  tell application "Google Chrome"
+    repeat with w in windows
+      if (id of w as text) is wid then
+        repeat with t in tabs of w
+          if (id of t as text) is tid then return contents of t
+        end repeat
+      end if
+    end repeat
+  end tell
+  error "tab " & tid & " not found"
+end findTab
 EOF
   done
 }
@@ -118,9 +132,23 @@ EOF
     if [[ "$(osascript - "${ref%%:*}" "${ref##*:}" << 'EOF'
 on run argv
   tell application "Google Chrome"
-    return loading of (tab id ((item 2 of argv) as integer) of window id ((item 1 of argv) as integer))
+    return loading of my findTab(item 1 of argv, item 2 of argv)
   end tell
 end run
+-- Window and tab ids can exceed the AppleScript integer range (2^29), where
+-- `as integer` turns them into reals that match nothing, so compare them as text.
+on findTab(wid, tid)
+  tell application "Google Chrome"
+    repeat with w in windows
+      if (id of w as text) is wid then
+        repeat with t in tabs of w
+          if (id of t as text) is tid then return contents of t
+        end repeat
+      end if
+    end repeat
+  end tell
+  error "tab " & tid & " not found"
+end findTab
 EOF
     )" == false ]]; then
       TAB="$ref"
@@ -138,10 +166,24 @@ exec_js() {
   if ! out="$(osascript - "${1%%:*}" "${1##*:}" "$2" 2>&1 << 'EOF'
 on run argv
   tell application "Google Chrome"
-    set t to tab id ((item 2 of argv) as integer) of window id ((item 1 of argv) as integer)
+    set t to my findTab(item 1 of argv, item 2 of argv)
     return execute t javascript (item 3 of argv)
   end tell
 end run
+-- Window and tab ids can exceed the AppleScript integer range (2^29), where
+-- `as integer` turns them into reals that match nothing, so compare them as text.
+on findTab(wid, tid)
+  tell application "Google Chrome"
+    repeat with w in windows
+      if (id of w as text) is wid then
+        repeat with t in tabs of w
+          if (id of t as text) is tid then return contents of t
+        end repeat
+      end if
+    end repeat
+  end tell
+  error "tab " & tid & " not found"
+end findTab
 EOF
   )"; then
     if [[ "$out" == *"Apple Events"* || "$out" == *"AppleScript"* ]]; then

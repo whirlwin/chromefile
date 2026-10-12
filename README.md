@@ -33,6 +33,10 @@ uvx check-jsonschema --default-filetype yaml \
   Chromefile
 ```
 
+## CLI
+
+[cli/](cli/README.md) holds `chromefile`, a macOS command line tool that installs, inspects and removes the Claude Browser Bridge extension in Google Chrome.
+
 ## Status
 
 Draft, version 1. The format may change incompatibly until version 1 is marked final.

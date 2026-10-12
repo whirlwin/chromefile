@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Claude Browser Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon32.png" alt="" width="20" height="20" />
+      <h1>Claude Browser Bridge</h1>
+    </header>
+
+    <section class="status">
+      <span id="dot" class="dot"></span>
+      <div>
+        <div id="state">Loading...</div>
+        <div id="detail" class="muted"></div>
+      </div>
+    </section>
+
+    <button id="toggle" type="button" disabled>...</button>
+
+    <dl>
+      <dt>Extension ID</dt>
+      <dd><code id="extension-id"></code></dd>
+      <dt>User scripts</dt>
+      <dd id="user-scripts">Checking...</dd>
+    </dl>
+
+    <h2>Recent commands</h2>
+    <ol id="log" class="log"></ol>
+    <p id="log-empty" class="muted">No commands yet.</p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

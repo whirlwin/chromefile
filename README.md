@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="Chromefile logo" width="128"></p>
+
 # Chromefile
 
 A Chromefile is a small YAML file that declares how Google Chrome (and Chromium-based browsers) should be set up: tab layout, hotkeys, and more over time. Like a Brewfile, you keep it in your dotfiles and any tool that implements this open, tool-neutral specification can apply it. It describes the result you want, not browser internals, so the same file stays readable and portable across machines, platforms and tools.

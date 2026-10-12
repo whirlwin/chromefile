@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title">
+  <title id="title">Chromefile</title>
+  <!-- A file (folded corner) holding a vertical tab strip and key: value lines -->
+  <path d="M28 8H88L112 32V108A12 12 0 0 1 100 120H28A12 12 0 0 1 16 108V20A12 12 0 0 1 28 8Z" fill="#1e1b4b"/>
+  <path d="M88 8V24A8 8 0 0 0 96 32H112Z" fill="#6366f1"/>
+  <rect x="28" y="22" width="44" height="8" rx="4" fill="#6366f1"/>
+  <rect x="28" y="44" width="22" height="14" rx="5" fill="#22d3ee"/>
+  <rect x="28" y="64" width="22" height="14" rx="5" fill="#4338ca"/>
+  <rect x="28" y="84" width="22" height="14" rx="5" fill="#4338ca"/>
+  <rect x="58" y="47" width="14" height="8" rx="4" fill="#a5b4fc"/>
+  <rect x="76" y="47" width="24" height="8" rx="4" fill="#e0e7ff"/>
+  <rect x="58" y="67" width="14" height="8" rx="4" fill="#a5b4fc"/>
+  <rect x="76" y="67" width="16" height="8" rx="4" fill="#e0e7ff"/>
+  <rect x="58" y="87" width="14" height="8" rx="4" fill="#a5b4fc"/>
+  <rect x="76" y="87" width="20" height="8" rx="4" fill="#e0e7ff"/>
+</svg>

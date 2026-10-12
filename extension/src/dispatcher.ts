@@ -17,7 +17,7 @@ export async function dispatch(handlers: HandlerMap, message: unknown, options: 
   const id = String(message.id);
   try {
     if (!(await options.isEnabled())) {
-      throw new BridgeError("disabled", "Claude Browser Bridge is disabled in the extension popup");
+      throw new BridgeError("disabled", "Chromefile is disabled in the extension popup");
     }
     const { method, params = {} } = message;
     if (typeof method !== "string") throw new BridgeError("bad_request", "method must be a string");

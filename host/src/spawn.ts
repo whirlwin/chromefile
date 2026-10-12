@@ -4,10 +4,10 @@
 import { execFile } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { isObject } from "./protocol";
-import { socketPath } from "./socket-path";
+import { appDir } from "./socket-path";
 
 export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -47,11 +47,6 @@ export class SpawnError extends Error {
   ) {
     super(message);
   }
-}
-
-/** The directory holding the socket, config.json and sessions/. */
-export function appDir(env: NodeJS.ProcessEnv = process.env): string {
-  return dirname(socketPath(env));
 }
 
 export function parseSpawnParams(params: unknown): SpawnParams {
@@ -190,7 +185,7 @@ export const APPLESCRIPT = [
 const OSASCRIPT_TIMEOUT_MS = 120_000;
 
 export function runOsascript(cwd: string, file: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const binary = env.CBB_OSASCRIPT || "/usr/bin/osascript";
+  const binary = env.CHROMEFILE_OSASCRIPT || "/usr/bin/osascript";
   const args = [...APPLESCRIPT.flatMap((line) => ["-e", line]), cwd, file];
   return new Promise((resolve, reject) => {
     execFile(binary, args, { timeout: OSASCRIPT_TIMEOUT_MS }, (error, _stdout, stderr) => {

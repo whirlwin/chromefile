@@ -33,12 +33,15 @@ pub struct Config {
     pub app: String,
     /// Where the extension files live; Chrome loads them from here.
     pub stable_dir: PathBuf,
+    /// Where chromefile kept the extension before it was renamed; deleted
+    /// once Chrome loads the extension from `stable_dir`.
+    pub legacy_dir: PathBuf,
     pub home: Option<PathBuf>,
 }
 
 impl Config {
     fn item(&self) -> String {
-        format!("extension {}", embedded::NAME)
+        "extension".to_string()
     }
 
     fn pretty(&self, path: &Path) -> String {
@@ -46,7 +49,7 @@ impl Config {
     }
 }
 
-fn pretty_path(path: &Path, home: Option<&Path>) -> String {
+pub fn pretty_path(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
@@ -301,6 +304,24 @@ pub fn install(config: &Config, replace: bool) -> Result<()> {
             info.path
         );
     }
+    remove_legacy_dir(config)
+}
+
+/// Deletes the folder an older chromefile loaded the extension from. Only
+/// called once Chrome no longer loads it from there.
+fn remove_legacy_dir(config: &Config) -> Result<()> {
+    if files::remove_dir(&config.legacy_dir)
+        .with_context(|| format!("could not delete {}", config.legacy_dir.display()))?
+    {
+        say(
+            "extension files",
+            "changed",
+            &format!(
+                "removed the old folder {}",
+                config.pretty(&config.legacy_dir)
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -524,11 +545,15 @@ pub fn uninstall(config: &Config) -> Result<()> {
     if files::remove_dir(&config.stable_dir)
         .with_context(|| format!("could not delete {}", config.stable_dir.display()))?
     {
-        say("files", "changed", &format!("deleted {stable}"));
+        say("extension files", "changed", &format!("deleted {stable}"));
     } else {
-        say("files", "unchanged", &format!("{stable} does not exist"));
+        say(
+            "extension files",
+            "unchanged",
+            &format!("{stable} does not exist"),
+        );
     }
-    Ok(())
+    remove_legacy_dir(config)
 }
 
 /// Removes the extension. Chrome asks for confirmation, and cancels the
@@ -602,7 +627,7 @@ mod tests {
 
     #[test]
     fn decides_what_install_does() {
-        let stable = Path::new("/nonexistent/chromefile/extensions/claude-browser-bridge");
+        let stable = Path::new("/nonexistent/chromefile/extension");
         let s = stable.to_str().unwrap();
 
         assert_eq!(

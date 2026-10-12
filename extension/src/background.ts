@@ -1,4 +1,4 @@
-// MV3 service worker. Owns the native messaging port to `cbb host` and
+// MV3 service worker. Owns the native messaging port to `chromefile host` and
 // dispatches requests to chrome.* APIs (see docs/architecture.md).
 //
 // An open native port keeps the worker alive, so the connected path needs no

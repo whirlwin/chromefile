@@ -11,14 +11,16 @@
 # background tabs, drive them, and close them. It needs "Allow JavaScript from
 # Apple Events" (View > Developer) in Chrome.
 #
-# claude.cwd is written to the bridge's config.json (in the app directory,
-# see scripts/lib.sh), where the host reads it when it spawns a Claude session.
+# claude.cwd is written to config.json in the chromefile app directory
+# (~/Library/Application Support/chromefile, or CHROMEFILE_HOME), where the
+# host reads it when it spawns a Claude session.
 #
-# Mods go through the bridge: `cbb call mods.*` (override the command with
-# CBB_CMD=/path/to/executable, for tests). Each mod's `file` is relative to the
-# directory of the config file. Mods registered in Chrome but missing from the
-# config are reported and left alone, never removed. If the bridge is not
-# connected the mods are reported as an error and the rest is still applied.
+# Mods go through the extension: `chromefile call mods.*` (override the
+# executable with CHROMEFILE_CMD=/path/to/executable, for tests). Each mod's
+# `file` is relative to the directory of the config file. Mods registered in
+# Chrome but missing from the config are reported and left alone, never
+# removed. If the extension is not connected the mods are reported as an error
+# and the rest is still applied.
 #
 # Usage:
 #   scripts/chrome-apply.sh [--dry-run] [path/to/chrome.yaml]
@@ -65,8 +67,7 @@ done
 config="${config:-$REPO/chrome.yaml}"
 
 [[ "$(uname -s)" == Darwin ]] || die "macOS only"
-# shellcheck source=scripts/lib.sh
-source "$REPO/scripts/lib.sh" # APP_DIR
+APP_DIR="${CHROMEFILE_HOME:-$HOME/Library/Application Support/chromefile}"
 command -v yq > /dev/null || die "yq not found; run 'mise install' in $REPO"
 if [[ "$mode" == apply ]]; then
   [[ -r "$config" ]] || die "cannot read $config"
@@ -202,14 +203,14 @@ EOF
 call_api() {
   local tab="$1" b64 js out i
   b64="$(printf '%s' "$2" | base64 | tr -d '\n')"
-  js="(function(){window.__cbb=undefined;try{
+  js="(function(){window.__cf=undefined;try{
 var D=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('$b64'),function(c){return c.charCodeAt(0);})));
 ($3)(D,function(r){var e=window.chrome&&chrome.runtime&&chrome.runtime.lastError;
-window.__cbb=JSON.stringify(e?{error:e.message}:{ok:r===undefined?null:r});});
-}catch(x){window.__cbb=JSON.stringify({error:String(x)});}return 'started';})()"
+window.__cf=JSON.stringify(e?{error:e.message}:{ok:r===undefined?null:r});});
+}catch(x){window.__cf=JSON.stringify({error:String(x)});}return 'started';})()"
   exec_js "$tab" "$js" > /dev/null
   for ((i = 0; i < 100; i++)); do
-    out="$(exec_js "$tab" "typeof window.__cbb==='string'?window.__cbb:''")"
+    out="$(exec_js "$tab" "typeof window.__cf==='string'?window.__cf:''")"
     if [[ -n "$out" ]]; then
       printf '%s' "$out"
       return
@@ -425,19 +426,15 @@ if [[ -n "$want_cwd" ]]; then
 fi
 
 # Mods ------------------------------------------------------------------------
-# cbb_call METHOD JSON: runs `cbb call` and sets CBB_OUT (stdout) and CBB_ERR
-# (first stderr line). Returns cbb's exit status: 0 ok, 2 not connected, other
+# cf_call METHOD JSON: runs `chromefile call` and sets CF_OUT (stdout) and CF_ERR
+# (first stderr line). Returns its exit status: 0 ok, 2 not connected, other
 # non-zero for an error. Never exits the script.
-if [[ -n "${CBB_CMD:-}" ]]; then
-  CBB=("$CBB_CMD")
-else
-  CBB=(node "$REPO/host/dist/cbb.js")
-fi
-cbb_call() {
+CF_CMD="${CHROMEFILE_CMD:-chromefile}"
+cf_call() {
   local errfile rc=0
   errfile="$(mktemp)"
-  CBB_OUT="$("${CBB[@]}" call "$1" "$2" 2> "$errfile")" || rc=$?
-  CBB_ERR="$(head -n 1 "$errfile")"
+  CF_OUT="$("$CF_CMD" call "$1" "$2" 2> "$errfile")" || rc=$?
+  CF_ERR="$(head -n 1 "$errfile")"
   rm -f "$errfile"
   return "$rc"
 }
@@ -466,14 +463,14 @@ mod_diff() {
 
 if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
   config_dir="$(cd "$(dirname "$config")" && pwd)"
-  if cbb_call mods.list '{}'; then
-    registered="$(yq -p=json -o=json -I=0 '.mods // []' <<< "$CBB_OUT")"
+  if cf_call mods.list '{}'; then
+    registered="$(yq -p=json -o=json -I=0 '.mods // []' <<< "$CF_OUT")"
   else
     rc=$?
     if ((rc == 2)); then
-      fail "mods not applied: the bridge is not connected (is Chrome running with the extension on?)${CBB_ERR:+ ($CBB_ERR)}"
+      fail "mods not applied: the bridge is not connected (is Chrome running with the extension on?)${CF_ERR:+ ($CF_ERR)}"
     else
-      fail "mods not applied: ${CBB_ERR:-cbb call mods.list failed with status $rc}"
+      fail "mods not applied: ${CF_ERR:-chromefile call mods.list failed with status $rc}"
     fi
     registered=""
   fi
@@ -516,16 +513,16 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
         echo "$verb $label: $what"
         continue
       fi
-      if ! cbb_call mods.register "$data"; then
-        fail "could not register $label: ${CBB_ERR:-cbb call mods.register failed}"
+      if ! cf_call mods.register "$data"; then
+        fail "could not register $label: ${CF_ERR:-chromefile call mods.register failed}"
         continue
       fi
       # Read back, like the settings: the bridge must now report what we want.
-      if ! cbb_call mods.list '{}'; then
-        fail "could not read back $label: ${CBB_ERR:-cbb call mods.list failed}"
+      if ! cf_call mods.list '{}'; then
+        fail "could not read back $label: ${CF_ERR:-chromefile call mods.list failed}"
         continue
       fi
-      registered="$(yq -p=json -o=json -I=0 '.mods // []' <<< "$CBB_OUT")"
+      registered="$(yq -p=json -o=json -I=0 '.mods // []' <<< "$CF_OUT")"
       now_raw="$(ID="$id" yq -p=json -o=json -I=0 '[.[] | select(.id == strenv(ID))] | .[0] // null' <<< "$registered")"
       if [[ "$now_raw" == null || "$(mod_state "$now_raw")" != "$want" ]]; then
         fail "registered $label but the bridge reports something else"

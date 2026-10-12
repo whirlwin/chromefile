@@ -1,4 +1,4 @@
-// `cbb call <method> [json-params]`: one request over the socket, for scripts
+// `chromefile call <method> [json-params]`: one request over the socket, for scripts
 // (scripts/chrome-apply.sh). Exit codes: 0 result printed to stdout, 1 the
 // bridge answered with an error, 2 not connected or bad usage.
 import { BridgeClient } from "./bridge-client";
@@ -10,7 +10,7 @@ const TIMEOUT_MS = 30_000;
 export async function runCall(args: readonly string[]): Promise<number> {
   const [method, rawParams] = args;
   if (!method) {
-    process.stderr.write("Usage: cbb call <method> [json-params]\n");
+    process.stderr.write("Usage: chromefile call <method> [json-params]\n");
     return 2;
   }
   let params: unknown = {};

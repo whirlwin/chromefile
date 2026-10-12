@@ -4,13 +4,13 @@ import { build } from "esbuild";
 // Recreate require from import.meta.url so they keep working once inlined.
 const banner = [
   "#!/usr/bin/env node",
-  'import { createRequire as __cbbCreateRequire } from "node:module";',
-  "const require = __cbbCreateRequire(import.meta.url);",
+  'import { createRequire as __cfCreateRequire } from "node:module";',
+  "const require = __cfCreateRequire(import.meta.url);",
 ].join("\n");
 
 await build({
   entryPoints: ["src/main.ts"],
-  outfile: "dist/cbb.js",
+  outfile: "dist/chromefile-host.js",
   bundle: true,
   platform: "node",
   format: "esm",

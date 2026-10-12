@@ -28,7 +28,7 @@ async function ensureAttached(tabId: number): Promise<void> {
   // The kill switch may have run detachAll while attach was in flight.
   if (!(await isEnabled())) {
     await chrome.debugger.detach({ tabId }).catch(() => undefined);
-    throw new BridgeError("disabled", "Claude Browser Bridge was disabled in the extension popup");
+    throw new BridgeError("disabled", "Chromefile was disabled in the extension popup");
   }
   attached.add(tabId);
 }

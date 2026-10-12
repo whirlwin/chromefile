@@ -1,5 +1,5 @@
-// `cbb mcp`: MCP server over stdio, started by Claude Code. Each tool call is
-// forwarded to `cbb host` over the Unix socket.
+// `chromefile mcp`: MCP server over stdio, started by Claude Code. Each tool call is
+// forwarded to `chromefile host` over the Unix socket.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -227,7 +227,7 @@ function toScreenshotResult(response: Response): CallToolResult {
 }
 
 export function createMcpServer(bridge: BridgeClient): McpServer {
-  const server = new McpServer({ name: "claude-browser-bridge", version: VERSION });
+  const server = new McpServer({ name: "chromefile", version: VERSION });
 
   for (const tool of TOOLS) {
     server.registerTool(

@@ -5,7 +5,7 @@ settings:
 
 # Extension keyboard shortcuts: extension name, then command name.
 shortcuts:
-  Claude Browser Bridge:
+  Chromefile:
     select-next-tab: Command+J
     select-previous-tab: Command+K
 

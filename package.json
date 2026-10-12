@@ -1,5 +1,5 @@
 {
-  "name": "claude-browser-bridge",
+  "name": "chromefile",
   "private": true,
   "type": "module",
   "workspaces": [

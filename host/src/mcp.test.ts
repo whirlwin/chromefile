@@ -44,7 +44,7 @@ function stopFakeHost(): Promise<void> {
 }
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "cbb-"));
+  dir = mkdtempSync(join(tmpdir(), "chromefile-"));
   socketPath = join(dir, "bridge.sock");
   bridge = new BridgeClient(socketPath);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -64,7 +64,7 @@ function textOf(result: any): string {
   return result.content[0].text;
 }
 
-describe("cbb mcp", () => {
+describe("chromefile mcp", () => {
   it("lists one tool per method plus bridge_status", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
@@ -78,7 +78,7 @@ describe("cbb mcp", () => {
   it("reports a missing browser as a tool error", async () => {
     const result: any = await client.callTool({ name: "tabs_list", arguments: {} });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/^not_connected: .*Claude Browser Bridge extension/);
+    expect(textOf(result)).toMatch(/^not_connected: .*Chromefile extension/);
 
     const status: any = await client.callTool({ name: "bridge_status", arguments: {} });
     expect(status.isError).toBeFalsy();

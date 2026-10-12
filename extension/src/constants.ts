@@ -1,5 +1,5 @@
 // The native messaging host registered by the installer (see host/).
-export const NATIVE_HOST_NAME = "io.whirlwin.claude_browser_bridge";
+export const NATIVE_HOST_NAME = "io.whirlwin.chromefile";
 
 // chrome.storage.local: the kill switch, toggled from the popup.
 export const ENABLED_KEY = "enabled";

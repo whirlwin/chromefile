@@ -84,8 +84,8 @@ describe("HostRequests", () => {
   it("fails everything at once, and survives a post that throws", async () => {
     const requests = new HostRequests();
     const pending = requests.request("claude.spawn", {}, () => {});
-    requests.failAll("Claude Browser Bridge is not connected");
-    expect(await pending).toEqual({ ok: false, error: "Claude Browser Bridge is not connected" });
+    requests.failAll("Chromefile is not connected");
+    expect(await pending).toEqual({ ok: false, error: "Chromefile is not connected" });
     const thrown = requests.request("claude.spawn", {}, () => {
       throw new Error("Attempting to use a disconnected port object");
     });

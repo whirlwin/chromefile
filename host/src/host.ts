@@ -1,4 +1,4 @@
-// `cbb host`: started by Chrome. Relays between the extension (native
+// `chromefile host`: started by Chrome. Relays between the extension (native
 // messaging on stdin/stdout) and any number of MCP servers connected to the
 // Unix socket (NDJSON).
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
@@ -38,7 +38,7 @@ interface Pending {
 }
 
 function log(message: string): void {
-  process.stderr.write(`cbb host: ${message}\n`);
+  process.stderr.write(`chromefile host: ${message}\n`);
 }
 
 export function runHost(): void {

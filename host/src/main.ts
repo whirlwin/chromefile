@@ -13,7 +13,7 @@ function main(): void {
       return;
     case "mcp":
       runMcp().catch((error: unknown) => {
-        process.stderr.write(`cbb mcp: ${(error as Error).message}\n`);
+        process.stderr.write(`chromefile mcp: ${(error as Error).message}\n`);
         process.exitCode = 1;
       });
       return;
@@ -21,7 +21,7 @@ function main(): void {
       runCall(process.argv.slice(3)).then(
         (code) => (process.exitCode = code),
         (error: unknown) => {
-          process.stderr.write(`cbb call: ${(error as Error).message}\n`);
+          process.stderr.write(`chromefile call: ${(error as Error).message}\n`);
           process.exitCode = 1;
         },
       );

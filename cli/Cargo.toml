@@ -2,7 +2,7 @@
 name = "chromefile"
 version = "0.1.0"
 edition = "2024"
-description = "Installs, inspects and removes the Claude Browser Bridge extension in Google Chrome on macOS"
+description = "Installs the Chromefile extension, native messaging host and MCP server on macOS, and runs the host"
 license = "MIT"
 repository = "https://github.com/whirlwin/chromefile"
 

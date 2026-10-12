@@ -1,6 +1,6 @@
 export type Mode = "host" | "mcp" | "call";
 
-export const USAGE = `Usage: cbb <mode>
+export const USAGE = `Usage: chromefile <mode>
 
 Modes:
   host                          Native messaging host, started by Chrome

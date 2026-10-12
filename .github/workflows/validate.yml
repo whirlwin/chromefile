@@ -36,24 +36,3 @@ jobs:
 
       - name: Lint YAML
         run: pipx run yamllint Chromefile tests/valid .github
-
-  cli:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cli
-    steps:
-      - uses: actions/checkout@v4
-
-      # Cargo.lock needs a recent toolchain; the runner's preinstalled one can lag.
-      - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
-
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test

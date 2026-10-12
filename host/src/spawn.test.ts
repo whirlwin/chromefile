@@ -67,8 +67,8 @@ describe("parseSpawnParams", () => {
 
 describe("resolveCwd", () => {
   it("reads config.json, expands ~ and falls back to home", () => {
-    const home = mkdtempSync(join(tmpdir(), "cbb-home-"));
-    const dir = mkdtempSync(join(tmpdir(), "cbb-app-"));
+    const home = mkdtempSync(join(tmpdir(), "chromefile-home-"));
+    const dir = mkdtempSync(join(tmpdir(), "chromefile-app-"));
     expect(resolveCwd(dir, home)).toBe(home); // default ~/git is missing
     mkdirSync(join(home, "git"));
     expect(resolveCwd(dir, home)).toBe(join(home, "git"));
@@ -82,7 +82,7 @@ describe("resolveCwd", () => {
 
 describe("writeSessionFile", () => {
   it("writes private files and prunes old ones", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cbb-app-"));
+    const dir = mkdtempSync(join(tmpdir(), "chromefile-app-"));
     const first = writeSessionFile(dir, "old");
     const stale = new Date(Date.now() - SESSION_RETENTION_MS - 60_000);
     utimesSync(first, stale, stale);

@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-Claude Code ──stdio (MCP)──▶ cbb mcp ──Unix socket (NDJSON)──▶ cbb host ◀──native messaging──▶ extension
+Claude Code ──stdio (MCP)──▶ chromefile mcp ──Unix socket (NDJSON)──▶ chromefile host ◀──native messaging──▶ extension
 ```
 
 Chrome spawns the native host when the extension calls `chrome.runtime.connectNative`,
@@ -10,20 +10,39 @@ server, spawned by Claude Code, reaches the host through a Unix socket instead.
 
 ## Processes
 
-| Process     | Started by  | stdin/stdout                        | Role                                  |
-|-------------|-------------|-------------------------------------|---------------------------------------|
-| extension   | Chrome      | n/a                                 | Executes commands with `chrome.*` APIs |
-| `cbb host`  | Chrome      | native messaging framing            | Relays between extension and socket    |
-| `cbb mcp`   | Claude Code | MCP over stdio                      | Exposes tools, forwards to socket      |
-| `cbb call`  | a script    | prints one result as JSON           | One request over the socket, then exits |
+| Process           | Started by  | stdin/stdout              | Role                                    |
+|-------------------|-------------|---------------------------|-----------------------------------------|
+| extension         | Chrome      | n/a                       | Executes commands with `chrome.*` APIs  |
+| `chromefile host` | Chrome      | native messaging framing  | Relays between extension and socket     |
+| `chromefile mcp`  | Claude Code | MCP over stdio            | Exposes tools, forwards to socket       |
+| `chromefile call` | a script    | prints one result as JSON | One request over the socket, then exits |
 
-Both `cbb` modes use stdout as a protocol channel. Logging goes to stderr only;
+All three are the same Rust `chromefile` binary handing over to the Node host
+(`host/`, bundled to `host/dist/chromefile-host.js`). The binary embeds that
+bundle, extracts it to `<app folder>/host/chromefile-host.js` (on install, and
+again whenever the file is missing or differs from the embedded bytes) and
+`exec`s `node <file> <mode> ...`, so stdio, signals and exit codes are
+node's own.
+
+- Chrome runs the native host manifest's `path`, which `chromefile install`
+  sets to the absolute, canonical path of the `chromefile` binary, with
+  `chrome-extension://<id>/` (and possibly `--parent-window=...`) as
+  arguments. A first argument starting with `chrome-extension://` selects host
+  mode; the hidden `chromefile host` subcommand does the same.
+- Chrome does not start the host with your shell `PATH`, so node comes from
+  `CHROMEFILE_NODE`, else the `node` key in `<app folder>/config.json`, which
+  install records as the real binary behind the `node` on `PATH` (a mise or
+  asdf shim resolved through `process.execPath`), else `node` from `PATH`.
+  Node 24 or newer is required.
+
+All three modes use stdout as a protocol channel. Logging goes to stderr only;
 a stray `console.log` corrupts the framing.
 
 ## Socket
 
-- Path: `~/Library/Application Support/claude-browser-bridge/bridge.sock`
-  (override with `CBB_SOCKET` for tests).
+- Path: `~/Library/Application Support/chromefile/chromefile.sock`, in the app
+  folder it shares with the CLI (override with `CHROMEFILE_SOCKET`, or move the
+  whole folder with `CHROMEFILE_HOME`, for tests).
 - Directory mode `0700`, socket mode `0600`. The trust boundary is the OS user:
   any process running as you can connect.
 - The newest host wins: on startup the host unlinks any existing socket and binds.
@@ -151,7 +170,7 @@ A mod running in the `USER_SCRIPT` world can ask the bridge to open a new
 interactive Claude Code session in a new tab of the current iTerm2 window.
 
 ```
-mod ──chrome.runtime.sendMessage──▶ extension ──{id:"x-n", method:"claude.spawn"}──▶ cbb host ──osascript──▶ iTerm2: claude "<prompt>"
+mod ──chrome.runtime.sendMessage──▶ extension ──{id:"x-n", method:"claude.spawn"}──▶ chromefile host ──osascript──▶ iTerm2: claude "<prompt>"
 ```
 
 ### User script messaging contract
@@ -177,8 +196,8 @@ fires for user scripts this extension registered. Anything not shaped like
 the above gets `{ ok: false, error: "unsupported message" }`; a wrong type or an
 oversized field gets a specific error. The extension adds the sender's origin
 (`origin`, from `sender.url`, or `"unknown"`). When the kill switch is on or the
-native port is down the reply is `{ ok: false, error: "Claude Browser Bridge is
-not connected" }`. Otherwise it sends `claude.spawn` to the host and waits up to
+native port is down the reply is `{ ok: false, error: "Chromefile is not
+connected" }`. Otherwise it sends `claude.spawn` to the host and waits up to
 15 s; port loss or the kill switch fails waiting requests at once. Each spawn is
 recorded in the popup's command log.
 
@@ -207,8 +226,8 @@ no whitespace (and so could be read as an option or a subcommand such as
 `update`) is prefixed with `Prompt: `.
 
 - **Config:** `<appdir>/config.json`, where `<appdir>` is the socket's
-  directory (`~/Library/Application Support/claude-browser-bridge`, or the
-  directory of `CBB_SOCKET`): `{ "claude": { "cwd": "/abs/path" } }`. A
+  directory (`~/Library/Application Support/chromefile`, or `CHROMEFILE_HOME`,
+  or else the directory of `CHROMEFILE_SOCKET`): `{ "claude": { "cwd": "/abs/path" } }`. A
   leading `~` is expanded. Default `~/git`; a missing directory or a relative
   path falls back to the home directory.
 - **Sessions:** the composed prompt is written to
@@ -219,7 +238,7 @@ no whitespace (and so could be read as an option or a subcommand such as
   `quoted form of`, never interpolated into the script. It activates iTerm2,
   creates a window if there is none or a tab in the current window otherwise,
   and types `cd '<cwd>' && claude "$(cat '<file>')"` into the new session.
-  `CBB_OSASCRIPT` overrides the binary (tests). A failure is `internal` with
+  `CHROMEFILE_OSASCRIPT` overrides the binary (tests). A failure is `internal` with
   osascript's stderr.
 
 The first spawn triggers macOS's Automation prompt ("Google Chrome wants to
@@ -228,10 +247,10 @@ process. While that prompt is open the extension's 15 s timeout may fire and
 the host's late reply is dropped; that is expected. The host gives osascript
 120 s.
 
-## `cbb call`
+## `chromefile call`
 
-`cbb call <method> [json-params]` connects to the socket, sends one request
+`chromefile call <method> [json-params]` connects to the socket, sends one request
 (`params` must be a JSON object, default `{}`), prints the `result` as JSON on
 stdout and exits 0. A bridge error prints `code: message` on stderr and exits
 1; not connected (no host listening) exits 2, as does a missing method. Used by
-scripts, e.g. `node host/dist/cbb.js call mods.list`.
+scripts, e.g. `chromefile call mods.list`.

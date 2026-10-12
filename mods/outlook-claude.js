@@ -16,11 +16,11 @@
 // "Reply"); a localized Outlook will not match them.
 (() => {
   "use strict";
-  if (globalThis.__cbbOutlookClaude) return;
-  globalThis.__cbbOutlookClaude = true;
+  if (globalThis.__cfOutlookClaude) return;
+  globalThis.__cfOutlookClaude = true;
 
   const MESSAGE = 'div[aria-label="Email message"]';
-  const MARK = "data-cbb-claude";
+  const MARK = "data-cf-claude";
   const CLAUDE_ORANGE = "#D97757";
   // Bodies are passed to a terminal session; keep them a sane size.
   const MAX_BODY = 200000;
@@ -38,7 +38,7 @@
   }
 
   const BUTTON_CSS = `
-.cbb-claude-btn {
+.cf-claude-btn {
   all: unset;
   box-sizing: border-box;
   display: inline-flex;
@@ -54,13 +54,13 @@
   cursor: pointer;
   flex: none;
 }
-.cbb-claude-btn:hover { background: var(--colorSubtleBackgroundHover, rgba(0, 0, 0, 0.06)); }
-.cbb-claude-btn:active { background: var(--colorSubtleBackgroundPressed, rgba(0, 0, 0, 0.1)); }
-.cbb-claude-btn:focus-visible {
+.cf-claude-btn:hover { background: var(--colorSubtleBackgroundHover, rgba(0, 0, 0, 0.06)); }
+.cf-claude-btn:active { background: var(--colorSubtleBackgroundPressed, rgba(0, 0, 0, 0.1)); }
+.cf-claude-btn:focus-visible {
   outline: 2px solid var(--colorStrokeFocus2, #000);
   outline-offset: -2px;
 }
-.cbb-claude-btn svg { width: 20px; height: 20px; display: block; pointer-events: none; }
+.cf-claude-btn svg { width: 20px; height: 20px; display: block; pointer-events: none; }
 `;
 
   function installButtonStyles() {
@@ -260,10 +260,10 @@ button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
     const status = el("p", { class: "status", role: "status", "aria-live": "polite" });
     const cancel = el("button", { type: "button", text: "Cancel" });
     const submit = el("button", { type: "button", class: "primary", text: "Open in iTerm" });
-    const title = el("h2", { id: "cbb-title" }, [claudeIcon(), "Ask Claude"]);
+    const title = el("h2", { id: "cf-title" }, [claudeIcon(), "Ask Claude"]);
     const panel = el(
       "div",
-      { class: "panel", role: "dialog", "aria-modal": "false", "aria-labelledby": "cbb-title" },
+      { class: "panel", role: "dialog", "aria-modal": "false", "aria-labelledby": "cf-title" },
       [
         title,
         textarea,
@@ -377,7 +377,7 @@ button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
   function makeButton(message) {
     const button = el("button", {
       type: "button",
-      class: "cbb-claude-btn",
+      class: "cf-claude-btn",
       [MARK]: "button",
       "aria-label": "Ask Claude about this email",
       "aria-haspopup": "dialog",

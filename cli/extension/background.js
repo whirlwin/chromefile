@@ -1,5 +1,5 @@
 // src/constants.ts
-var NATIVE_HOST_NAME = "io.whirlwin.claude_browser_bridge";
+var NATIVE_HOST_NAME = "io.whirlwin.chromefile";
 var ENABLED_KEY = "enabled";
 var STATUS_KEY = "status";
 var LOG_KEY = "log";
@@ -59,7 +59,7 @@ async function ensureAttached(tabId) {
   }
   if (!await isEnabled()) {
     await chrome.debugger.detach({ tabId }).catch(() => void 0);
-    throw new BridgeError("disabled", "Claude Browser Bridge was disabled in the extension popup");
+    throw new BridgeError("disabled", "Chromefile was disabled in the extension popup");
   }
   attached.add(tabId);
 }
@@ -99,7 +99,7 @@ async function dispatch(handlers2, message, options) {
   const id = String(message.id);
   try {
     if (!await options.isEnabled()) {
-      throw new BridgeError("disabled", "Claude Browser Bridge is disabled in the extension popup");
+      throw new BridgeError("disabled", "Chromefile is disabled in the extension popup");
     }
     const { method, params = {} } = message;
     if (typeof method !== "string") throw new BridgeError("bad_request", "method must be a string");
@@ -208,7 +208,7 @@ var chromeCallMethods = {
 };
 
 // src/userScriptMessages.ts
-var NOT_CONNECTED = "Claude Browser Bridge is not connected";
+var NOT_CONNECTED = "Chromefile is not connected";
 var UNSUPPORTED = "unsupported message";
 var HOST_REQUEST_TIMEOUT_MS = 15e3;
 var HOST_ID_PREFIX = "x-";

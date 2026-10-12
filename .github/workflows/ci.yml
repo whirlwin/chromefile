@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  node:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +17,34 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+      # The CLI embeds cli/extension and cli/host, so they must match a fresh build.
+      - name: Vendored builds are up to date
+        run: |
+          scripts/vendor.sh --no-build
+          if [ -n "$(git status --porcelain -- cli/extension cli/host)" ]; then
+            git status --short -- cli/extension cli/host
+            echo "::error::cli/extension or cli/host is stale; run scripts/vendor.sh and commit the result"
+            exit 1
+          fi
+
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cargo.lock needs a recent toolchain; the runner's preinstalled one can lag.
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

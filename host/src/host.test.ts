@@ -1,4 +1,4 @@
-// Runs the real bundled `cbb host` as a child process, playing Chrome on its
+// Runs the real bundled `chromefile host` as a child process, playing Chrome on its
 // stdin/stdout and MCP servers on its socket.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -15,8 +15,8 @@ let workDir: string;
 let binary: string;
 
 beforeAll(async () => {
-  workDir = mkdtempSync(join(tmpdir(), "cbb-"));
-  binary = join(workDir, "cbb.js");
+  workDir = mkdtempSync(join(tmpdir(), "chromefile-"));
+  binary = join(workDir, "chromefile-host.js");
   // Bundle into the temp dir rather than dist/ so this never races `npm run build`.
   await build({
     entryPoints: [join(hostDir, "src/main.ts")],
@@ -26,7 +26,7 @@ beforeAll(async () => {
     format: "esm",
     target: "node24",
     banner: {
-      js: 'import { createRequire as __cbbCreateRequire } from "node:module";\nconst require = __cbbCreateRequire(import.meta.url);',
+      js: 'import { createRequire as __cfCreateRequire } from "node:module";\nconst require = __cfCreateRequire(import.meta.url);',
     },
     logLevel: "silent",
   });
@@ -64,7 +64,7 @@ interface Host {
 
 async function startHost(socketPath: string, env: NodeJS.ProcessEnv = {}): Promise<Host> {
   const child = spawn(process.execPath, [binary, "host", "chrome-extension://test/"], {
-    env: { ...process.env, CBB_SOCKET: socketPath, ...env },
+    env: { ...process.env, CHROMEFILE_SOCKET: socketPath, ...env },
   });
   const fromHost = new Inbox();
   const decoder = new MessageDecoder();
@@ -114,14 +114,14 @@ async function connect(socketPath: string): Promise<Client> {
 }
 
 function newSocketPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), "cbb-"));
+  const dir = mkdtempSync(join(tmpdir(), "chromefile-"));
   const path = join(dir, "s", "bridge.sock");
   // macOS limits socket paths to 104 bytes.
   expect(path.length).toBeLessThan(104);
   return path;
 }
 
-describe("cbb host", () => {
+describe("chromefile host", () => {
   it("relays between the extension and multiple socket clients", async () => {
     const socketPath = newSocketPath();
     const host = await startHost(socketPath);
@@ -215,7 +215,7 @@ describe("cbb host", () => {
   });
 
   it("refuses a socket path too long for sun_path", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "cbb-"));
+    const dir = mkdtempSync(join(tmpdir(), "chromefile-"));
     const result = await runToExit(join(dir, "x".repeat(120), "bridge.sock"));
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Unix sockets do not allow");
@@ -233,18 +233,18 @@ describe("cbb host", () => {
 });
 
 async function runToExit(socketPath: string): Promise<{ code: number | null; stderr: string }> {
-  const child = spawn(process.execPath, [binary, "host"], { env: { ...process.env, CBB_SOCKET: socketPath } });
+  const child = spawn(process.execPath, [binary, "host"], { env: { ...process.env, CHROMEFILE_SOCKET: socketPath } });
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
   const code = await new Promise<number | null>((resolve) => child.on("exit", resolve));
   return { code, stderr };
 }
 
-describe("cbb mcp process", () => {
+describe("chromefile mcp process", () => {
   it("exits when Claude Code closes stdin, even with the bridge socket open", async () => {
     const socketPath = newSocketPath();
     const host = await startHost(socketPath);
-    const mcp = spawn(process.execPath, [binary, "mcp"], { env: { ...process.env, CBB_SOCKET: socketPath } });
+    const mcp = spawn(process.execPath, [binary, "mcp"], { env: { ...process.env, CHROMEFILE_SOCKET: socketPath } });
     const exited = new Promise<number | null>((resolve) => mcp.on("exit", resolve));
     const replies = new Inbox();
     let buffer = "";
@@ -290,12 +290,12 @@ describe("extension-initiated requests", () => {
   it("serves claude.spawn and rejects other methods", async () => {
     const socketPath = newSocketPath();
     const appDir = dirname(socketPath);
-    const home = mkdtempSync(join(tmpdir(), "cbb-home-"));
-    const project = mkdtempSync(join(tmpdir(), "cbb-proj-"));
+    const home = mkdtempSync(join(tmpdir(), "chromefile-home-"));
+    const project = mkdtempSync(join(tmpdir(), "chromefile-proj-"));
     mkdirSync(appDir, { recursive: true, mode: 0o700 });
     writeFileSync(join(appDir, "config.json"), JSON.stringify({ claude: { cwd: project } }));
     const fake = fakeOsascript(home);
-    const host = await startHost(socketPath, { CBB_OSASCRIPT: fake.path, HOME: home });
+    const host = await startHost(socketPath, { CHROMEFILE_OSASCRIPT: fake.path, HOME: home });
 
     host.toHost({ id: "x-1", method: "claude.spawn", params: { prompt: "Summarize", email: { subject: "Hi", body: "b" }, origin: "https://outlook.office.com" } });
     expect(await host.fromHost.next()).toEqual({ id: "x-1", result: {} });
@@ -321,9 +321,9 @@ describe("extension-initiated requests", () => {
 
   it("reports osascript failures as internal with stderr", async () => {
     const socketPath = newSocketPath();
-    const home = mkdtempSync(join(tmpdir(), "cbb-home-"));
+    const home = mkdtempSync(join(tmpdir(), "chromefile-home-"));
     const fake = fakeOsascript(home, 1);
-    const host = await startHost(socketPath, { CBB_OSASCRIPT: fake.path, HOME: home });
+    const host = await startHost(socketPath, { CHROMEFILE_OSASCRIPT: fake.path, HOME: home });
     host.toHost({ id: "x-1", method: "claude.spawn", params: { prompt: "hello there" } });
     const reply = await host.fromHost.next();
     expect(reply).toMatchObject({ id: "x-1", error: { code: "internal" } });
@@ -336,7 +336,7 @@ describe("extension-initiated requests", () => {
 });
 
 function runCall(socketPath: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, [binary, "call", ...args], { env: { ...process.env, CBB_SOCKET: socketPath } });
+  const child = spawn(process.execPath, [binary, "call", ...args], { env: { ...process.env, CHROMEFILE_SOCKET: socketPath } });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
@@ -344,7 +344,7 @@ function runCall(socketPath: string, args: string[]): Promise<{ code: number | n
   return new Promise((resolve) => child.on("exit", (code) => resolve({ code, stdout, stderr })));
 }
 
-describe("cbb call", () => {
+describe("chromefile call", () => {
   it("prints the result, reports errors, and tells when not connected", async () => {
     const socketPath = newSocketPath();
     const host = await startHost(socketPath);

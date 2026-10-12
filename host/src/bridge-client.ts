@@ -1,10 +1,10 @@
-// Client side of the host's Unix socket, used by `cbb mcp`.
+// Client side of the host's Unix socket, used by `chromefile mcp`.
 import { createConnection, type Socket } from "node:net";
 import { MAX_OUTGOING_BYTES } from "./framing";
 import { errorResponse, isObject, type BridgeError, type Response } from "./protocol";
 
 export const NOT_CONNECTED_MESSAGE =
-  "The browser is not connected. Open Chrome with the Claude Browser Bridge extension enabled.";
+  "The browser is not connected. Open Chrome with the Chromefile extension enabled.";
 
 interface Pending {
   resolve: (response: Response) => void;
@@ -107,7 +107,7 @@ export class BridgeClient {
     try {
       message = JSON.parse(line);
     } catch {
-      process.stderr.write("cbb mcp: ignoring invalid JSON from the host\n");
+      process.stderr.write("chromefile mcp: ignoring invalid JSON from the host\n");
       return;
     }
     if (!isObject(message)) return;

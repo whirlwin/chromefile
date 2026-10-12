@@ -1,5 +1,5 @@
-//! The Claude Browser Bridge extension, embedded at build time from
-//! `extensions/claude-browser-bridge` (see `scripts/vendor-extension.sh`).
+//! The Chromefile extension, embedded at build time from `extension/` (a copy
+//! of the repository's `extension/dist`, see `scripts/vendor.sh`).
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -7,11 +7,7 @@ use include_dir::{Dir, DirEntry, include_dir};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-static EXTENSION: Dir<'static> =
-    include_dir!("$CARGO_MANIFEST_DIR/extensions/claude-browser-bridge");
-
-/// The name used in output lines and as the folder name under the stable dir.
-pub const NAME: &str = "claude-browser-bridge";
+static EXTENSION: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/extension");
 
 /// Every embedded file as (path relative to the extension root, bytes).
 pub fn files() -> Vec<(&'static Path, &'static [u8])> {
@@ -73,7 +69,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_from_embedded_key_is_the_bridge_id() {
+    fn id_from_embedded_key_is_the_fixed_id() {
         assert_eq!(manifest().unwrap().id, "cbapdndkoijjfggigdfalnjgjopdebid");
     }
 

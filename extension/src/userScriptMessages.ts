@@ -3,7 +3,7 @@
 // docs/architecture.md, "Extension-initiated requests".
 import { errorMessage } from "./protocol";
 
-export const NOT_CONNECTED = "Claude Browser Bridge is not connected";
+export const NOT_CONNECTED = "Chromefile is not connected";
 export const UNSUPPORTED = "unsupported message";
 export const HOST_REQUEST_TIMEOUT_MS = 15_000;
 // Ids of requests this extension sends to the host. Replies carry the same id

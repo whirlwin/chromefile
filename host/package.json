@@ -1,11 +1,8 @@
 {
-  "name": "cbb",
+  "name": "chromefile-host",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "cbb": "dist/cbb.js"
-  },
   "scripts": {
     "build": "node build.mjs",
     "test": "vitest run",

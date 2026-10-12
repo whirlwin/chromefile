@@ -154,12 +154,12 @@
       document.addEventListener("keydown", () => window.__shortcuts++);
 
       document.getElementById("rerender").addEventListener("click", () => {
-        document.querySelectorAll('div[role=toolbar] [data-cbb-claude]').forEach((n) => n.remove());
+        document.querySelectorAll('div[role=toolbar] [data-cf-claude]').forEach((n) => n.remove());
       });
       document.getElementById("expand").addEventListener("click", () => {
         const m2 = document.getElementById("m2");
         const tpl = document.querySelector("#m3 .fui-Overflow").cloneNode(true);
-        tpl.querySelectorAll("[data-cbb-claude]").forEach((n) => n.remove());
+        tpl.querySelectorAll("[data-cf-claude]").forEach((n) => n.remove());
         m2.querySelector(".hdr").append(tpl);
         const body = document.createElement("div");
         body.setAttribute("role", "document");

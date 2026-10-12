@@ -325,18 +325,49 @@ const SET_ACTIVE_INDEX: &str = r#"on run argv
   end tell
 end run"#;
 
+// AppleScript handlers that find open panels such as the folder picker.
+// Chrome 151 reports the picker with subrole AXDialog, Chrome 154 (macOS 26)
+// as an AXStandardWindow, so a window also counts as a panel when it has a
+// top-level split group, which browser windows lack.
+macro_rules! panel_handlers {
+    () => {
+        r#"on isPanel(w)
+  tell application "System Events"
+    try
+      if subrole of w is "AXDialog" then return true
+      return (count of splitter groups of w) > 0
+    end try
+  end tell
+  return false
+end isPanel
+
+on findPanel(procName)
+  tell application "System Events" to tell process procName
+    repeat with w in windows
+      if my isPanel(w) then return contents of w
+    end repeat
+  end tell
+  return missing value
+end findPanel
+
+"#
+    };
+}
+
 // Drives the macOS folder picker that loadUnpacked opens. argv: process name,
 // folder path. Keystrokes go to whatever is frontmost, so before each one we
 // check that the browser is in front with the picker as its front window.
-const DRIVE_PICKER: &str = r#"on ready(procName)
+const DRIVE_PICKER: &str = concat!(
+    panel_handlers!(),
+    r#"on ready(procName)
   -- Other apps can grab focus for a moment (a notification, say), so try
   -- to win it back a few times before giving up.
   tell application "System Events" to tell process procName
     repeat 5 times
       try
-        if frontmost and subrole of window 1 is "AXDialog" then return true
+        if frontmost and my isPanel(window 1) then return true
         set frontmost to true
-        perform action "AXRaise" of (first window whose subrole is "AXDialog")
+        perform action "AXRaise" of my findPanel(procName)
       end try
       delay 0.3
     end repeat
@@ -359,7 +390,7 @@ on run argv
   tell application "System Events" to tell process procName
     set found to false
     repeat 100 times
-      if (count of (windows whose subrole is "AXDialog")) > 0 then
+      if my findPanel(procName) is not missing value then
         set found to true
         exit repeat
       end if
@@ -401,21 +432,29 @@ on run argv
   -- can land on a file in the column view. Select is the last button.
   try
     tell application "System Events" to tell process procName
-      click last button of splitter group 1 of (first window whose subrole is "AXDialog")
+      click last button of splitter group 1 of my findPanel(procName)
     end tell
   on error
     if not my ready(procName) then return "lost-focus"
     tell application "System Events" to keystroke return
   end try
   return "ok"
-end run"#;
+end run"#
+);
 
 // Counts open panels such as folder pickers. argv: process name.
-const COUNT_DIALOGS: &str = r#"on run argv
+const COUNT_DIALOGS: &str = concat!(
+    panel_handlers!(),
+    r#"on run argv
+  set n to 0
   tell application "System Events" to tell process (item 1 of argv)
-    return count of (windows whose subrole is "AXDialog")
+    repeat with w in windows
+      if my isPanel(w) then set n to n + 1
+    end repeat
   end tell
-end run"#;
+  return n
+end run"#
+);
 
 // Accepts the "Remove extension?" confirmation (Remove is its default
 // button). argv: process name. Chrome cancels the dialog when it loses focus.

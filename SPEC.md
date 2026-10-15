@@ -64,7 +64,7 @@ The empty string `""` means: ensure the action has no hotkey (remove any existin
 
 Two actions MUST NOT resolve to the same key combination on the same platform. Combinations are compared after normalizing: `Command` is treated as `Ctrl` and modifier order is ignored, so `Command+J` and `Ctrl+J` collide. The empty string is exempt.
 
-A hotkey may replace a browser built-in shortcut (for example, `Command+J` opens Downloads in Chrome on macOS). Tools SHOULD warn when a hotkey shadows a known built-in shortcut.
+A hotkey may replace a browser built-in shortcut (for example, `Command+J` is `Ctrl+J` on Windows and Linux, where it opens Downloads in Chrome). Tools SHOULD warn when a hotkey shadows a known built-in shortcut.
 
 ### 6.1 Action registry
 
@@ -109,7 +109,7 @@ Modifier meanings:
 | `Shift`   | Shift        | Shift                 |
 | `MacCtrl` | Control (⌃)  | not available         |
 
-`Ctrl` meaning Command on macOS follows Chrome's extension command notation, so tools can pass values through unchanged. `Command` is provided because it reads naturally to macOS users; both are portable. A combination containing `MacCtrl` that applies to a platform other than macOS cannot be applied there and MUST be reported as unsupported (section 7).
+`Ctrl` meaning Command on macOS follows the notation of `suggested_key` in a Chrome extension manifest, where Chrome itself turns `Ctrl` into Command and `MacCtrl` into Control on macOS. Chrome APIs that set shortcuts in other ways may not make that translation, so a tool using them may need to translate values itself. `Command` is provided because it reads naturally to macOS users; both are portable. A combination containing `MacCtrl` that applies to a platform other than macOS cannot be applied there and MUST be reported as unsupported (section 7).
 
 The key names follow Chrome's extension command notation. Browsers may reject some combinations that this grammar allows (for example Chrome rejects `Ctrl+Alt` combinations for extension shortcuts); tools MUST report those as failed or unsupported, never skip them silently.
 

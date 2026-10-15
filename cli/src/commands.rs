@@ -125,13 +125,15 @@ fn same_path(chrome_path: &str, ours: &Path) -> bool {
     !chrome_path.is_empty() && norm(theirs) == norm(ours)
 }
 
-fn preflight(config: &Config) -> Result<Chrome> {
-    if !is_running(&config.app)? {
-        bail!("{} is not running; start it first", config.app);
+/// Checks that exactly one instance of `app` runs, with a window, and starts
+/// a session with it.
+pub fn preflight(app: &str) -> Result<Chrome> {
+    if !is_running(app)? {
+        bail!("{app} is not running; start it first");
     }
     // With two instances (say the user's Chrome and an automation one with
     // its own --user-data-dir), AppleScript silently picks one of them.
-    let running = instances(&config.app)?;
+    let running = instances(app)?;
     if running.len() > 1 {
         let list: Vec<String> = running
             .iter()
@@ -144,13 +146,13 @@ fn preflight(config: &Config) -> Result<Chrome> {
             "{} instances of {} are running (pids {}); quit the extra ones (for example a \
              Playwright or automation instance with --user-data-dir) and retry",
             running.len(),
-            config.app,
+            app,
             list.join(", ")
         );
     }
-    let chrome = Chrome::new(&config.app)?;
+    let chrome = Chrome::new(app)?;
     if chrome.window_count()? == 0 {
-        bail!("{} has no open window; open one first", config.app);
+        bail!("{app} has no open window; open one first");
     }
     Ok(chrome)
 }
@@ -182,7 +184,7 @@ fn load_error(v: &Value) -> Option<String> {
 pub fn install(config: &Config, replace: bool) -> Result<()> {
     let manifest = embedded::manifest()?;
     let item = config.item();
-    let mut chrome = preflight(config)?;
+    let mut chrome = preflight(&config.app)?;
 
     let embedded_files = embedded::files();
     let files_changed = files::sync_dir(&config.stable_dir, &embedded_files)
@@ -440,7 +442,7 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
 pub fn status(config: &Config) -> Result<bool> {
     let manifest = embedded::manifest()?;
     let item = config.item();
-    let mut chrome = preflight(config)?;
+    let mut chrome = preflight(&config.app)?;
     let tab = &chrome.open_extensions_tab()?;
     let profile = expect_ok(
         chrome.call(tab, &json!({}), GET_PROFILE)?,
@@ -518,7 +520,7 @@ pub fn uninstall(config: &Config) -> Result<()> {
     let manifest = embedded::manifest()?;
     let item = config.item();
     let id = manifest.id.as_str();
-    let mut chrome = preflight(config)?;
+    let mut chrome = preflight(&config.app)?;
     let tab = &chrome.open_extensions_tab()?;
 
     match get_info(&chrome, tab, id)? {

@@ -37,7 +37,7 @@ uvx check-jsonschema --default-filetype yaml \
 
 The specification is tool-neutral: any tool may implement it, and nothing in a Chromefile depends on the code below. This repository also holds one implementation for macOS, called chromefile as well. It lets a locally running [Claude Code](https://claude.com/claude-code) drive the Chrome you are already logged in to: list and open tabs, read and screenshot pages, evaluate JavaScript, inject CSS, install persistent user scripts ("mods"), rewrite network requests and call most `chrome.*` APIs. It is made of:
 
-- [`cli/`](cli/README.md): the `chromefile` command line tool (Rust). It installs everything below and is also the native messaging host and the MCP server.
+- [`cli/`](cli/README.md): the `chromefile` command line tool (Rust). It installs everything below and is also the native messaging host and the MCP server. `chromefile apply` applies a Chromefile to Chrome on macOS; it supports specification version 1.
 - [`extension/`](extension/): the Chromefile Chrome extension (Manifest V3, TypeScript).
 - [`host/`](host/): the Node host behind `chromefile host`, `chromefile mcp` and `chromefile call`, embedded in the binary.
 - [`mods/`](mods/), [`chrome.yaml`](chrome.yaml) and [`scripts/chrome-apply.sh`](scripts/chrome-apply.sh): user scripts and declarative Chrome settings, in this implementation's own `chrome.yaml` format.
@@ -118,7 +118,7 @@ The toolbar badge shows `ON` while the extension is connected to the host, `...`
 | `⌘J` / `Alt+J` | Next tab, one down (wraps around) |
 | `⌘K` / `Alt+K` | Previous tab, one up (wraps around) |
 
-They work everywhere, including the new tab page, and keep working while the kill switch is off. `⌘J` replaces Chrome's Downloads shortcut.
+They work everywhere, including the new tab page, and keep working while the kill switch is off.
 
 The bindings in the manifest are only defaults that Chrome applies on first install. The source of truth is the `shortcuts` section of [`chrome.yaml`](chrome.yaml): change them there and run `scripts/chrome-apply.sh` (see [Declarative Chrome config](#declarative-chrome-config)). Rebinding them by hand at `chrome://extensions/shortcuts` works too, but the next apply puts the `chrome.yaml` values back.
 

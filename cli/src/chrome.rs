@@ -1,7 +1,8 @@
 //! Drives a running Chrome through AppleScript.
 //!
-//! Chrome's private extension APIs (`chrome.developerPrivate`) only exist on
-//! the chrome://extensions page, so we open that page as a background tab and
+//! Chrome's private extension and settings APIs (`chrome.developerPrivate`,
+//! `chrome.settingsPrivate`) only exist on the chrome://extensions and
+//! chrome://settings pages, so we open such a page as a background tab and
 //! run JavaScript in it with AppleScript's `execute javascript`. That returns
 //! only a synchronous result, so async calls store their JSON result in a
 //! window variable that we poll.
@@ -286,10 +287,14 @@ const EXEC_JS: &str = r#"on run argv
   error "the chromefile helper tab is gone" number 9100
 end run"#;
 
+// Skips windows without the tab, so that one of them can't stop the loop
+// before the window that has it, and does nothing if the tab is gone.
 const CLOSE_TAB: &str = r#"on run argv
   tell application "__APP__"
     repeat with w in windows
-      close (tabs of w whose URL is (item 1 of argv))
+      if (count of (tabs of w whose URL is (item 1 of argv))) > 0 then
+        close (tabs of w whose URL is (item 1 of argv))
+      end if
     end repeat
   end tell
 end run"#;
@@ -511,25 +516,31 @@ impl Chrome {
     /// Opens chrome://extensions in a background tab of the front window and
     /// waits for it to load.
     pub fn open_extensions_tab(&mut self) -> Result<Tab> {
+        self.open_tab("chrome://extensions")
+    }
+
+    /// Opens a page such as chrome://settings in a background tab of the
+    /// front window and waits for it to load. A marker in the query makes
+    /// the URL unique; see `Tab`.
+    pub fn open_tab(&mut self, page: &str) -> Result<Tab> {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let tab = Tab {
-            url: format!(
-                "chrome://extensions/?chromefile={:x}{:x}",
-                std::process::id(),
-                nanos
-            ),
+            url: format!("{page}/?chromefile={:x}{:x}", std::process::id(), nanos),
         };
-        osascript(&self.script(OPEN_TAB), &[&tab.url])?;
+        // Recorded before it exists: Ctrl-C while the script runs fails the
+        // call even when Chrome has made the tab, and Drop must still close
+        // it. Closing a tab that was never made does nothing.
         self.opened.push(tab.clone());
+        osascript(&self.script(OPEN_TAB), &[&tab.url])?;
         for _ in 0..100 {
             if osascript(&self.script(TAB_LOADING), &[&tab.url])? == "false" {
                 return Ok(tab);
             }
             pause(100)?;
         }
-        bail!("timed out waiting for chrome://extensions to load")
+        bail!("timed out waiting for {page} to load")
     }
 
     /// Leaves a tab open when the session ends.

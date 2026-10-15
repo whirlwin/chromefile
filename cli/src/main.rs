@@ -1,9 +1,11 @@
 //! chromefile: installs, inspects and removes the Chromefile extension, its
-//! native messaging host and its Claude Code MCP server on macOS, and runs
-//! the embedded Node host for Chrome (`host`), Claude Code (`mcp`) and
-//! scripts (`call`).
+//! native messaging host and its Claude Code MCP server on macOS, applies
+//! Chromefiles to Chrome (`apply`), and runs the embedded Node host for
+//! Chrome (`host`), Claude Code (`mcp`) and scripts (`call`).
 
+mod apply;
 mod chrome;
+mod chromefile;
 mod commands;
 mod embedded;
 mod files;
@@ -19,7 +21,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Installs, inspects and removes the Chromefile extension, native host and MCP server (macOS)",
+    about = "Installs, inspects and removes the Chromefile extension, native host and MCP server, and applies Chromefiles (macOS)",
     after_help = "Chrome must be running with View > Developer > Allow JavaScript from Apple Events \
                   turned on. install also needs Accessibility permission for your terminal app, \
                   to type the folder into Chrome's Load unpacked picker."
@@ -54,6 +56,21 @@ enum Cmd {
         /// Leave the extension in Chrome alone (for tests).
         #[arg(long)]
         skip_extension: bool,
+    },
+    /// Apply a Chromefile (tab layout, hotkeys) to Chrome. Supports Chromefile
+    /// specification version 1.
+    ///
+    /// Validates the whole file first and changes nothing if it is invalid.
+    /// Reports each setting as changed, unchanged, failed or unsupported, and
+    /// exits 1 if the file is invalid or any setting failed. Hotkeys need the
+    /// Chromefile extension (chromefile install).
+    Apply {
+        /// Report what would change without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// The Chromefile to apply. Default: ./Chromefile if it exists, else
+        /// $XDG_CONFIG_HOME/chromefile/Chromefile (~/.config/chromefile/Chromefile).
+        path: Option<PathBuf>,
     },
     /// Run the MCP server over stdio (what Claude Code starts).
     Mcp,
@@ -121,9 +138,15 @@ fn setup_env() -> Result<setup::Env> {
     })
 }
 
+/// The browser's application name: CHROMEFILE_CHROME_APP (for tests), else
+/// Google Chrome.
+fn chrome_app() -> String {
+    std::env::var("CHROMEFILE_CHROME_APP").unwrap_or_else(|_| "Google Chrome".into())
+}
+
 fn extension_config(env: &setup::Env) -> commands::Config {
     commands::Config {
-        app: std::env::var("CHROMEFILE_CHROME_APP").unwrap_or_else(|_| "Google Chrome".into()),
+        app: chrome_app(),
         stable_dir: env.app_dir.join("extension"),
         legacy_dir: env.app_dir.join("extensions"),
         home: env.home.clone(),
@@ -153,6 +176,9 @@ fn main() -> ExitCode {
         Cmd::Mcp => return run_node("mcp", &[]),
         Cmd::Call { args } => return run_node("call", &args),
         Cmd::Host { args } => return run_node("host", &args),
+        // Before the macOS check: validating a file works anywhere, and apply
+        // reports what it can't do elsewhere per setting.
+        Cmd::Apply { dry_run, path } => return apply::run(path, dry_run, &chrome_app()),
         Cmd::Install { skip_extension, .. }
         | Cmd::Status { skip_extension }
         | Cmd::Uninstall { skip_extension } => (cli.command, skip_extension),

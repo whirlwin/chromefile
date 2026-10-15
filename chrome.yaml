@@ -20,5 +20,6 @@ mods:
     file: mods/outlook-claude.js
     # runAt: document_idle   (optional; world defaults to USER_SCRIPT)
 
-# Personal mods and Claude personas go in chrome.local.yaml (gitignored), with
-# their code in mods/local/; apply it with scripts/chrome-apply.sh chrome.local.yaml.
+# Personal mods and Claude personas go in ~/.config/chromefile/chrome.yaml, with
+# their code in ~/.config/chromefile/mods/; scripts/chrome-apply.sh applies that
+# file automatically after this one.

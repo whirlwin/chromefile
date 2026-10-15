@@ -17,18 +17,26 @@
 # spawns a Claude session. Other keys and personas in that file are kept, and
 # a voice is never printed.
 #
-# A second file, such as a gitignored chrome.local.yaml with personal mods and
-# personas, is applied the same way: pass its path. Each run leaves alone the
-# mods and personas it does not declare.
+# Personal mods and personas live outside the repository, in the user config
+# $XDG_CONFIG_HOME/chromefile/chrome.yaml (~/.config/chromefile/chrome.yaml
+# when XDG_CONFIG_HOME is unset or, as the XDG spec says, not absolute). It
+# has the same format, and its mods' `file` paths are relative to its own
+# directory, so their code goes in mods/ next to it. Without a path, the repo
+# chrome.yaml is applied and then, if it exists, the user config, so a value
+# declared in both ends up with the user config's. Each file gets its own run,
+# so the user config is applied even if the repo file's run fails. With a
+# path, only that file is applied. Each run leaves alone the mods and personas
+# its file does not declare.
 #
 # Mods go through the extension: `chromefile call mods.*` (override the
 # executable with CHROMEFILE_CMD=/path/to/executable, for tests). Each mod's
 # `file` is relative to the directory of the config file. A mod with
 # `enabled: false` (missing means true) is unregistered instead of registered,
 # if it is registered, and its file and assets are left unread. Mods
-# registered in Chrome but missing from the config are reported and left
-# alone, never removed. If the extension is not connected the mods are
-# reported as an error and the rest is still applied.
+# registered in Chrome but missing from the config (from both files, when both
+# are applied) are reported as extra and left alone, never removed. If the
+# extension is not connected the mods are reported as an error and the rest is
+# still applied.
 #
 # A mod's `assets` (NAME: https URL) are downloaded on every run (images
 # only, at most 256 KB each) and inlined as data: URIs in place of the string
@@ -37,7 +45,8 @@
 # CHROMEFILE_ASSET_ALLOW_FILE=1 to allow file:// URLs as well.
 #
 # Usage:
-#   scripts/chrome-apply.sh [--dry-run] [path/to/chrome.yaml]
+#   scripts/chrome-apply.sh [--dry-run]                      repo file, then user config
+#   scripts/chrome-apply.sh [--dry-run] path/to/chrome.yaml  only that file
 #   scripts/chrome-apply.sh --list-settings [regex]
 set -euo pipefail
 
@@ -78,11 +87,50 @@ while (($#)); do
   esac
   shift
 done
-config="${config:-$REPO/chrome.yaml}"
+
+# The XDG spec says to ignore a relative XDG_CONFIG_HOME.
+xdg_config="${XDG_CONFIG_HOME:-}"
+[[ "$xdg_config" == /* ]] || xdg_config="$HOME/.config"
+USER_CONFIG="$xdg_config/chromefile/chrome.yaml"
+
+# show_path PATH: PATH with $HOME shown as ~, for output.
+show_path() {
+  case "$1" in
+    "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
 [[ "$(uname -s)" == Darwin ]] || die "macOS only"
 APP_DIR="${CHROMEFILE_HOME:-$HOME/Library/Application Support/chromefile}"
 command -v yq > /dev/null || die "yq not found; run 'mise install' in $REPO"
+
+# No path and a user config: apply the repo file, then the user config, each
+# in a run of its own, so that a run that stops early (Chrome not running,
+# say) cannot keep the other file from being applied. Two variables tell each
+# run about the other file; they are internal, not switches for users.
+# _CHROMEFILE_OTHER_CONFIG names it, so its mods are not reported as extra.
+# _CHROMEFILE_OTHER_REPORTS_EXTRA=1 says its run comes later and lists the
+# registered mods too, so the extra ones are left to it and reported once.
+if [[ "$mode" == apply && -z "$config" && -e "$USER_CONFIG" ]]; then
+  dry=()
+  $dry_run && dry=(--dry-run)
+  # The same test as the Mods section below: a mapping with a mods section.
+  user_lists_mods=""
+  [[ "$(yq 'select(type == "!!map") | .mods | length' "$USER_CONFIG" 2> /dev/null)" =~ ^[1-9] ]] &&
+    user_lists_mods=1
+  rc=0
+  _CHROMEFILE_OTHER_CONFIG="$USER_CONFIG" _CHROMEFILE_OTHER_REPORTS_EXTRA="$user_lists_mods" \
+    "$BASH" "${BASH_SOURCE[0]}" ${dry[@]+"${dry[@]}"} "$REPO/chrome.yaml" || rc=1
+  echo "applying   $(show_path "$USER_CONFIG")"
+  _CHROMEFILE_OTHER_CONFIG="$REPO/chrome.yaml" _CHROMEFILE_OTHER_REPORTS_EXTRA="" \
+    "$BASH" "${BASH_SOURCE[0]}" ${dry[@]+"${dry[@]}"} "$USER_CONFIG" || rc=1
+  exit "$rc"
+fi
+config="${config:-$REPO/chrome.yaml}"
+other_config="${_CHROMEFILE_OTHER_CONFIG:-}"
+other_reports_extra="${_CHROMEFILE_OTHER_REPORTS_EXTRA:-}"
+
 if [[ "$mode" == apply ]]; then
   [[ -r "$config" ]] || die "cannot read $config"
   yq -e 'type == "!!map"' "$config" > /dev/null 2>&1 || die "$config is not a YAML mapping"
@@ -743,12 +791,17 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
       fi
       echo "$verb $label: $done_what"
     done < <(yq -r '.mods // {} | keys | .[]' "$config")
-    while IFS= read -r id; do
-      [[ -n "$id" ]] || continue
-      if [[ "$(ID="$id" yq '.mods | has(strenv(ID))' "$config")" != true ]]; then
-        echo "extra      mods.$id is registered but not in $(basename "$config") (left alone)"
-      fi
-    done < <(yq -p=json -r '.[].id' <<< "$registered")
+    # When both files are applied, a mod either one declares is not extra.
+    if [[ "$other_reports_extra" != 1 ]]; then
+      declared_in="$(show_path "$config_dir/$(basename "$config")")"
+      [[ -z "$other_config" ]] || declared_in+=" or $(show_path "$other_config")"
+      while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        [[ "$(ID="$id" yq '.mods | has(strenv(ID))' "$config")" != true ]] || continue
+        [[ -z "$other_config" || "$(ID="$id" yq '.mods // {} | has(strenv(ID))' "$other_config" 2> /dev/null)" != true ]] || continue
+        echo "extra      mods.$id is registered but not in $declared_in (left alone)"
+      done < <(yq -p=json -r '.[].id' <<< "$registered")
+    fi
   fi
 fi
 

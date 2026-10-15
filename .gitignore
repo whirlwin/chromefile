@@ -5,8 +5,3 @@ dist/
 *.zip
 *.crx
 *.pem
-
-# Personal mods and config that stay on this machine: put the mods in
-# mods/local/ and apply them with scripts/chrome-apply.sh chrome.local.yaml.
-mods/local/
-chrome.local.yaml

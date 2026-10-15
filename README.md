@@ -194,10 +194,10 @@ mods:
 ```
 
 ```sh
-scripts/chrome-apply.sh                       # apply chrome.yaml
+scripts/chrome-apply.sh                       # apply chrome.yaml, then your personal config
 scripts/chrome-apply.sh --dry-run             # show what would change, change nothing
 scripts/chrome-apply.sh --list-settings tabs  # pref names and current values matching a regex
-scripts/chrome-apply.sh chrome.local.yaml     # apply another file, such as your personal config
+scripts/chrome-apply.sh path/to/chrome.yaml   # apply only that file
 ```
 
 It is idempotent: each line reports `unchanged` or `changed` (old -> new), and only differing values are written and then read back. Values keep their YAML type (booleans, numbers, strings, lists, maps). An unknown pref, extension or command is reported, the rest is still applied, and the exit status is non-zero. Keybindings use the manifest format (`Command+J`, `Alt+Shift+K`, `MacCtrl+L`; on macOS `Ctrl` means Command); an empty value clears a shortcut.
@@ -206,7 +206,7 @@ It is idempotent: each line reports `unchanged` or `changed` (old -> new), and o
 
 `claude.personas` maps persona names to voices for [draft replies](#drafting-replies-in-a-persona). A name matches `^[a-z][a-z0-9-]{0,31}$` and a voice is a non-empty string of at most 4,000 characters; a name or voice that breaks these rules is reported as an error. Each entry is written to `claude.personas.<name>` in the same `config.json`, keeping other keys and other personas. Personas the YAML does not list are left alone, so removing one from the YAML does not remove it from `config.json`. The voice text is never printed: the lines read `unchanged  claude.personas.<name>` or `changed    claude.personas.<name>`, and `would set  claude.personas.<name>` in a dry run.
 
-`mods` are registered through the extension (`chromefile call mods.list`, `mods.register` and `mods.unregister`), so the extension must be connected and **Allow User Scripts** on. A mod whose matches, code, `runAt` or `world` differ from the registered one is re-registered. A mod with `enabled: false` (missing means `true`) is unregistered if it is registered (`removed`) and reported as `unchanged` if it is not; its file, matches and assets are not checked or downloaded, so a stale path or asset URL cannot stand in the way of turning it off. Tabs that are already open keep the injected script until they are reloaded, so reload them after turning a mod off or back on. Mods registered in Chrome but missing from the file being applied are reported as `extra` (the line names that file) and left alone, since they may come from another file, such as your [personal config](#personal-config), or have been registered by other means (use the `mods_unregister` tool to remove those); to turn off a mod that a file declares, use `enabled: false` rather than deleting its entry. If the extension is not connected the mods are reported as an error, the rest is still applied and the exit status is non-zero.
+`mods` are registered through the extension (`chromefile call mods.list`, `mods.register` and `mods.unregister`), so the extension must be connected and **Allow User Scripts** on. A mod whose matches, code, `runAt` or `world` differ from the registered one is re-registered. A mod with `enabled: false` (missing means `true`) is unregistered if it is registered (`removed`) and reported as `unchanged` if it is not; its file, matches and assets are not checked or downloaded, so a stale path or asset URL cannot stand in the way of turning it off. Tabs that are already open keep the injected script until they are reloaded, so reload them after turning a mod off or back on. Mods registered in Chrome but missing from the file being applied (from both files, when your [personal config](#personal-config) is applied too) are reported as `extra`, with the line naming the file or files by path, and left alone, since they may come from another file or have been registered by other means (use the `mods_unregister` tool to remove those); to turn off a mod that a file declares, use `enabled: false` rather than deleting its entry. If the extension is not connected the mods are reported as an error, the rest is still applied and the exit status is non-zero.
 
 A mod's `assets` keep images out of the repository: on every run (dry runs too) each URL is downloaded with `curl` (`https://` only, redirects included), checked to be an image by its bytes and at most 256 KB (the code travels as a command line argument and a native message, which Chrome caps at 1 MiB), and inlined as a `data:` URI wherever the mod's code contains `__ASSET_<NAME>__` (`NAME` matches `[A-Z0-9_]+`). The comparison with the registered mod uses the inlined code, so the mod is re-registered only when the code or the image changed. A failed download is an error for that mod; the others are still applied. `scripts/test/chrome-apply-assets.sh` tests this without Chrome; it sets `CHROMEFILE_ASSET_ALLOW_FILE=1`, a test-only switch that also allows `file://` URLs.
 
@@ -216,27 +216,27 @@ Settings and shortcuts do not use the extension. For them the script drives Chro
 
 ### Personal config
 
-Mods and personas that are only for you can stay out of the repository. Put their config in `chrome.local.yaml` next to `chrome.yaml` and the mods' code in `mods/local/`; both are gitignored. The file has the same format as `chrome.yaml`, and a relative `file:` resolves against the YAML file's directory, so `file: mods/local/<name>.js` works:
+Mods and personas that are only for you live outside the repository entirely, in `~/.config/chromefile/chrome.yaml` with the mods' code in `~/.config/chromefile/mods/`. Nothing personal sits in a clone, ignored or not, so it cannot be committed by accident and it survives deleting or recloning the repository. If `XDG_CONFIG_HOME` is set to an absolute path, the file is `$XDG_CONFIG_HOME/chromefile/chrome.yaml` instead; a relative `XDG_CONFIG_HOME` is ignored, as the XDG spec says. The file has the same format as `chrome.yaml`, and a relative `file:` resolves against the YAML file's directory, so `file: mods/<name>.js` points into `~/.config/chromefile/mods/`:
 
 ```yaml
-# chrome.local.yaml
+# ~/.config/chromefile/chrome.yaml
 claude:
   personas:
     plain: Plain and friendly. Short sentences, everyday words, no jargon.
 mods:
   my-mod:
     matches: ["https://example.com/*"]
-    file: mods/local/my-mod.js
+    file: mods/my-mod.js
 ```
 
-Apply it on its own, alongside the shared file:
+Without a path, `scripts/chrome-apply.sh` applies `chrome.yaml` and then, if it exists, your personal config, with an `applying   ~/.config/chromefile/chrome.yaml` line before the second file's lines. Each file gets a run of its own, so your personal config is applied even when the run for `chrome.yaml` fails (Chrome not running, for example), and the exit status is non-zero if either run had errors. Given a path, the script applies only that file:
 
 ```sh
-scripts/chrome-apply.sh                     # chrome.yaml
-scripts/chrome-apply.sh chrome.local.yaml   # your own mods and personas
+scripts/chrome-apply.sh                                   # chrome.yaml, then your personal config
+scripts/chrome-apply.sh ~/.config/chromefile/chrome.yaml  # only your personal config
 ```
 
-Each run leaves alone the mods its file does not declare (when the file has a `mods` section, it reports the others as `extra`, naming the file it applied) and the personas its file does not list, so the two runs do not undo each other. A Chrome setting, a shortcut, `claude.cwd` or a persona declared in both files ends up with the value from whichever ran last, so keep each in one file.
+Each run leaves alone the mods and personas its file does not declare, so the two runs do not undo each other. Neither run reports the other file's mods as `extra`; a registered mod that neither file declares is reported once, naming both files. A Chrome setting, a shortcut, `claude.cwd` or a persona declared in both files ends up with the value from your personal config, since it is applied last, so keep each in one file.
 
 ### Security
 
@@ -264,7 +264,7 @@ npm run lint && npm test   # extension and host
 npm run build              # extension/dist and host/dist/chromefile-host.js
 scripts/vendor.sh          # build, then copy both into cli/ for the binary to embed
 cd cli && cargo test       # the CLI; see cli/README.md
-scripts/test/chrome-apply-assets.sh   # chrome-apply.sh mod assets, disabled mods and personas (macOS)
+scripts/test/chrome-apply-assets.sh   # chrome-apply.sh mod assets, disabled mods, personas and the personal config (macOS)
 ```
 
 - `cli/extension/` and `cli/host/` are committed copies of the builds, so that `cargo install --git` works without Node. CI rebuilds them and fails if they differ, so run `scripts/vendor.sh` and commit the result after changing the extension or the host.

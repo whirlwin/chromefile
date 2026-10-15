@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Tests the mod assets, disabled mods (`enabled: false`) and claude.personas
-# of scripts/chrome-apply.sh without Chrome: configs with only mods or claude
-# keys, a stub `chromefile` (CHROMEFILE_CMD) that keeps registered mods in
-# files, an `osascript` on PATH that fails if anything calls it, file:// assets
-# (CHROMEFILE_ASSET_ALLOW_FILE=1) and a temp app directory (CHROMEFILE_HOME)
-# for config.json. macOS only, like the script.
+# Tests the mod assets, disabled mods (`enabled: false`), claude.personas and
+# the user config of scripts/chrome-apply.sh without Chrome: configs with only
+# mods or claude keys, a stub `chromefile` (CHROMEFILE_CMD) that keeps
+# registered mods in files, an `osascript` on PATH that fails if anything
+# calls it, file:// assets (CHROMEFILE_ASSET_ALLOW_FILE=1), a temp app
+# directory (CHROMEFILE_HOME) for config.json, and HOME and XDG_CONFIG_HOME
+# inside the temp directory, so your own user config is never read. macOS
+# only, like the script.
 #
 # Usage: scripts/test/chrome-apply-assets.sh
 set -uo pipefail
@@ -46,6 +48,8 @@ case "$2" in
 esac
 EOF2
 chmod +x "$T/bin/osascript" "$T/bin/chromefile"
+# Some runs point HOME into $T, where a mise shim would not find its tools.
+ln -s "$(mise which yq 2> /dev/null || command -v yq)" "$T/bin/yq"
 
 # A 1x1 PNG, and a text file posing as an image.
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' \
@@ -202,16 +206,16 @@ check "rejects a non-boolean enabled and leaves the mod registered"
 [[ ! -e "$T/osascript-called" ]]
 check "never runs osascript (disabled mods)"
 
-cat > "$T/chrome.local.yaml" << 'EOF2'
+cat > "$T/second.yaml" << 'EOF2'
 mods:
-  local-only:
+  second-only:
     matches: ["https://example.com/*"]
     file: plain.js
 EOF2
-CONFIG="$T/chrome.local.yaml" apply
+HOME="$T" CONFIG="$T/second.yaml" apply
 rc=$?
-((rc == 0)) && [[ "$OUT" == *"extra      mods.toggled is registered but not in chrome.local.yaml (left alone)"* && "$OUT" == *"changed    mods.local-only: registered"* ]]
-check "reports an extra mod against the file applied"
+((rc == 0)) && [[ "$OUT" == *"extra      mods.toggled is registered but not in ~/second.yaml (left alone)"* && "$OUT" == *"changed    mods.second-only: registered"* ]]
+check "reports an extra mod against the file applied, by its path"
 
 [[ ! -e "$T/home/config.json" ]]
 check "configs with only mods leave config.json alone"
@@ -333,6 +337,123 @@ check "rejects claude.personas that is not a map, still applies the rest"
 
 [[ ! -e "$T/osascript-called" ]]
 check "never runs osascript (personas)"
+
+# The user config --------------------------------------------------------------
+# Without a path the script applies the chrome.yaml of its own repository and
+# then the user config, so these runs use a copy of the script in $T/repo, with
+# HOME at $T (paths print as ~/...) and the user config in $T/xdg.
+mkdir -p "$T/repo/scripts" "$T/repo/mods" "$T/xdg/chromefile/mods" "$T/empty"
+cp "$REPO/scripts/chrome-apply.sh" "$T/repo/scripts/"
+echo 'console.log("repo");' > "$T/repo/mods/repo-mod.js"
+echo 'console.log("user");' > "$T/xdg/chromefile/mods/user-mod.js"
+write_repo_config() {
+  cat > "$T/repo/chrome.yaml" << 'EOF2'
+mods:
+  repo-mod:
+    matches: ["https://example.com/*"]
+    file: mods/repo-mod.js
+EOF2
+}
+write_repo_config
+cat > "$T/xdg/chromefile/chrome.yaml" << 'EOF2'
+claude:
+  personas:
+    mine: My own voice. voice-marker
+mods:
+  user-mod:
+    matches: ["https://example.com/*"]
+    file: mods/user-mod.js
+EOF2
+
+# apply_auto [OPTION...]: runs the copy from $T with HOME at $AUTO_HOME
+# (default $T) and XDG_CONFIG_HOME at $XDG (default $T/xdg), output in OUT.
+apply_auto() {
+  local rc=0
+  OUT="$(cd "$T" && PATH="$T/bin:$PATH" HOME="${AUTO_HOME:-$T}" XDG_CONFIG_HOME="${XDG:-$T/xdg}" STATE="$T/state" \
+    CHROMEFILE_CMD="$T/bin/chromefile" CHROMEFILE_HOME="$T/home" "$T/repo/scripts/chrome-apply.sh" "$@" 2>&1)" || rc=$?
+  return "$rc"
+}
+
+# A registered mod that neither file declares.
+rm -f "$T"/state/*.json
+echo '{"id":"stranger","matches":["https://example.com/*"],"js":"x"}' > "$T/state/stranger.json"
+apply_auto --dry-run
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"would set  mods.repo-mod: not registered"*"applying   ~/xdg/chromefile/chrome.yaml"*"would set  mods.user-mod: not registered"* ]] &&
+  [[ ! -e "$T/state/repo-mod.json" && ! -e "$T/state/user-mod.json" ]]
+check "dry run without a path covers both files and registers nothing"
+
+apply_auto
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"changed    mods.repo-mod: registered"*"applying   ~/xdg/chromefile/chrome.yaml"*"changed    mods.user-mod: registered"* ]] &&
+  [[ "$OUT" == *"changed    claude.personas.mine"* && "$OUT" != *voice-marker* ]] &&
+  [[ "$(yq -p=json -o=json -r '.js' "$T/state/user-mod.json")" == 'console.log("user");' ]]
+check "without a path applies the repo file, then the user config"
+[[ "$OUT" != *"extra      mods.repo-mod"* && "$OUT" != *"extra      mods.user-mod"* && "$(grep -c mods.stranger <<< "$OUT")" == 1 ]] &&
+  [[ "$OUT" == *"extra      mods.stranger is registered but not in ~/xdg/chromefile/chrome.yaml or ~/repo/chrome.yaml (left alone)"* ]]
+check "reports only a mod in neither file as extra, once"
+
+echo 'console.log("user, edited");' > "$T/xdg/chromefile/mods/user-mod.js"
+apply_auto "$T/repo/chrome.yaml"
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"unchanged  mods.repo-mod"* && "$OUT" != *applying* && "$OUT" != *claude.personas* ]] &&
+  [[ "$OUT" == *"extra      mods.user-mod is registered but not in ~/repo/chrome.yaml (left alone)"* ]] &&
+  [[ "$(yq -p=json -o=json -r '.js' "$T/state/user-mod.json")" == 'console.log("user");' ]]
+check "a path applies only that file and reports the user mod as extra"
+
+XDG="$T/empty" apply_auto "$T/repo/chrome.yaml"
+explicit="$OUT"
+XDG="$T/empty" apply_auto
+rc=$?
+((rc == 0)) && [[ "$OUT" == "$explicit" && "$OUT" != *applying* ]]
+check "without a user config, the same output as with the repo file's path"
+
+# Relative to the working directory ($T), xdg/chromefile/chrome.yaml exists, so
+# using it would apply user-mod.
+mkdir -p "$T/fakehome/.config/chromefile/mods"
+echo 'console.log("home");' > "$T/fakehome/.config/chromefile/mods/home-mod.js"
+cat > "$T/fakehome/.config/chromefile/chrome.yaml" << 'EOF2'
+mods:
+  home-mod:
+    matches: ["https://example.com/*"]
+    file: mods/home-mod.js
+EOF2
+AUTO_HOME="$T/fakehome" XDG=xdg apply_auto
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"applying   ~/.config/chromefile/chrome.yaml"* && "$OUT" == *"changed    mods.home-mod: registered"* ]] &&
+  [[ "$OUT" != *"mods.user-mod: "* && "$OUT" != *"unchanged  mods.user-mod"* ]]
+check "ignores a relative XDG_CONFIG_HOME"
+
+cat >> "$T/repo/chrome.yaml" << 'EOF2'
+  broken:
+    matches: ["https://example.com/*"]
+    file: mods/missing.js
+EOF2
+apply_auto
+rc=$?
+((rc == 1)) && [[ "$OUT" == *"mods.broken: cannot read file"*"1 error(s); the rest was applied"*"applying   "*"changed    mods.user-mod: updated (code)"* ]]
+check "an error in the repo file still applies the user config, exit status 1"
+
+echo '- not a mapping' > "$T/repo/chrome.yaml"
+echo 'console.log("user, again");' > "$T/xdg/chromefile/mods/user-mod.js"
+apply_auto
+rc=$?
+((rc == 1)) && [[ "$OUT" == *"is not a YAML mapping"*"applying   "*"changed    mods.user-mod: updated (code)"* ]]
+check "a repo file that stops its run still applies the user config"
+
+write_repo_config
+cat >> "$T/xdg/chromefile/chrome.yaml" << 'EOF2'
+  user-broken:
+    matches: ["https://example.com/*"]
+    file: mods/missing.js
+EOF2
+apply_auto
+rc=$?
+((rc == 1)) && [[ "$OUT" == *"unchanged  mods.repo-mod"*"applying   "*"mods.user-broken: cannot read file"* ]]
+check "an error in the user config gives exit status 1"
+
+[[ ! -e "$T/osascript-called" ]]
+check "never runs osascript (user config)"
 
 if ((failures)); then
   echo "$failures failure(s)"

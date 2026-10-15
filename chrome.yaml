@@ -1,13 +1,6 @@
-# Chrome preferences, by their internal name (the keys chrome://settings changes).
-# List them with: scripts/chrome-apply.sh --list-settings [filter]
-settings:
-  vertical_tabs.enabled: true
-
-# Extension keyboard shortcuts: extension name, then command name.
-shortcuts:
-  Chromefile:
-    select-next-tab: Command+J
-    select-previous-tab: Command+K
+# Tab layout and hotkeys live in the Chromefile next to this file (apply it with
+# `chromefile apply`), so they are not repeated here. Raw Chrome preferences
+# (`settings:`) and other extensions' shortcuts (`shortcuts:`) can still go here.
 
 # Claude Code sessions spawned from the browser (e.g. the Outlook button).
 claude:

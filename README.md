@@ -120,7 +120,7 @@ The toolbar badge shows `ON` while the extension is connected to the host, `...`
 
 They work everywhere, including the new tab page, and keep working while the kill switch is off.
 
-The bindings in the manifest are only defaults that Chrome applies on first install. The source of truth is the `shortcuts` section of [`chrome.yaml`](chrome.yaml): change them there and run `scripts/chrome-apply.sh` (see [Declarative Chrome config](#declarative-chrome-config)). Rebinding them by hand at `chrome://extensions/shortcuts` works too, but the next apply puts the `chrome.yaml` values back.
+The bindings in the manifest are only defaults that Chrome applies on first install. The source of truth is the `hotkeys` section of the [`Chromefile`](Chromefile): change them there and run `chromefile apply` (see [cli/README.md](cli/README.md#apply)). Rebinding them by hand at `chrome://extensions/shortcuts` works too, but the next apply puts the Chromefile values back, and `chromefile apply --check` reports the difference.
 
 ### Outlook: Ask Claude button
 

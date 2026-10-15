@@ -211,15 +211,24 @@ var chromeCallMethods = {
 var NOT_CONNECTED = "Chromefile is not connected";
 var UNSUPPORTED = "unsupported message";
 var HOST_REQUEST_TIMEOUT_MS = 15e3;
+var DRAFT_TIMEOUT_MS = 12e4;
 var HOST_ID_PREFIX = "x-";
 var MAX_PROMPT = 1e4;
 var MAX_FIELD = 2e3;
 var MAX_BODY = 2e5;
 var TRUNCATED = "\n[truncated]";
 var EMAIL_FIELDS = ["subject", "from", "to", "cc", "date", "body"];
+var MAX_TWEET_TEXT = 4e3;
+var MAX_TWEET_FIELD = 500;
+var TWEET_FIELDS = ["author", "handle", "url"];
+var PERSONA_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 function parseUserScriptMessage(message, senderUrl) {
-  const unsupported = { ok: false, error: UNSUPPORTED };
-  if (!isObject2(message) || message.type !== "claude.spawn") return unsupported;
+  if (!isObject2(message)) return { ok: false, error: UNSUPPORTED };
+  if (message.type === "claude.spawn") return parseSpawn(message, senderUrl);
+  if (message.type === "claude.draft") return parseDraft(message, senderUrl);
+  return { ok: false, error: UNSUPPORTED };
+}
+function parseSpawn(message, senderUrl) {
   const { prompt, email } = message;
   if (typeof prompt !== "string" || prompt.trim() === "") return { ok: false, error: "prompt must be a non-empty string" };
   if (prompt.length > MAX_PROMPT) return { ok: false, error: `prompt exceeds ${MAX_PROMPT} characters` };
@@ -240,7 +249,30 @@ function parseUserScriptMessage(message, senderUrl) {
       parsedEmail[key] = value;
     }
   }
-  return { ok: true, params: { prompt, email: parsedEmail, origin: originOf(senderUrl) } };
+  return { ok: true, method: "claude.spawn", params: { prompt, email: parsedEmail, origin: originOf(senderUrl) } };
+}
+function parseDraft(message, senderUrl) {
+  const { persona, tweet } = message;
+  if (typeof persona !== "string" || !PERSONA_NAME.test(persona)) {
+    return { ok: false, error: "persona must be a lowercase name: a-z, 0-9 and -, at most 32 characters, starting with a letter" };
+  }
+  if (!isObject2(tweet)) return { ok: false, error: "tweet must be an object" };
+  const { text } = tweet;
+  if (typeof text !== "string" || text.trim() === "") return { ok: false, error: "tweet.text must be a non-empty string" };
+  if (text.length > MAX_TWEET_TEXT) return { ok: false, error: `tweet.text exceeds ${MAX_TWEET_TEXT} characters` };
+  const parsedTweet = { text };
+  for (const key of TWEET_FIELDS) {
+    const value = tweet[key];
+    if (value === void 0) continue;
+    if (typeof value !== "string") return { ok: false, error: `tweet.${key} must be a string` };
+    if (value.length > MAX_TWEET_FIELD) return { ok: false, error: `tweet.${key} exceeds ${MAX_TWEET_FIELD} characters` };
+    parsedTweet[key] = value;
+  }
+  return {
+    ok: true,
+    method: "claude.draft",
+    params: { persona, tweet: parsedTweet, origin: originOf(senderUrl) }
+  };
 }
 function originOf(url) {
   try {
@@ -259,13 +291,13 @@ var HostRequests = class {
   timeoutMs;
   pending = /* @__PURE__ */ new Map();
   next = 1;
-  request(method, params, post) {
+  request(method, params, post, timeoutMs = this.timeoutMs) {
     const id = `${HOST_ID_PREFIX}${this.next++}`;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve({ ok: false, error: `No reply from the host within ${this.timeoutMs / 1e3}s` });
-      }, this.timeoutMs);
+        resolve({ ok: false, error: `No reply from the host within ${timeoutMs / 1e3}s` });
+      }, timeoutMs);
       this.pending.set(id, { resolve, timer });
       try {
         post({ id, method, params });
@@ -274,10 +306,15 @@ var HostRequests = class {
       }
     });
   }
-  /** Settles the matching request. Unknown or late replies are dropped. */
+  /**
+   * Settles the matching request. Unknown or late replies are dropped. A
+   * string `text` in the result (claude.draft) is passed on to the mod.
+   */
   handleReply(message) {
     if (message.error) {
       this.settle(message.id, { ok: false, error: String(message.error.message ?? "Unknown error") });
+    } else if (isObject2(message.result) && typeof message.result.text === "string") {
+      this.settle(message.id, { ok: true, text: message.result.text });
     } else {
       this.settle(message.id, { ok: true });
     }
@@ -646,9 +683,10 @@ async function handleUserScriptMessage(message, senderUrl) {
   if (!parsed.ok) return parsed;
   const p = port;
   if (!p || !await isEnabled()) return { ok: false, error: NOT_CONNECTED };
-  const reply = await hostRequests.request("claude.spawn", parsed.params, (m) => p.postMessage(m));
-  if (!reply.ok) console.warn("claude.spawn failed:", reply.error);
-  void recordCommand("claude.spawn", reply.ok);
+  const timeout = parsed.method === "claude.draft" ? DRAFT_TIMEOUT_MS : HOST_REQUEST_TIMEOUT_MS;
+  const reply = await hostRequests.request(parsed.method, parsed.params, (m) => p.postMessage(m), timeout);
+  if (!reply.ok) console.warn(`${parsed.method} failed:`, reply.error);
+  void recordCommand(parsed.method, reply.ok);
   return reply;
 }
 var BADGES = {

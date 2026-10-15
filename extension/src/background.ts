@@ -16,7 +16,9 @@ import { handlers } from "./methods/index";
 import { initShortcuts } from "./shortcuts";
 import type { Response } from "./protocol";
 import {
+  DRAFT_TIMEOUT_MS,
   enableUserScriptMessaging,
+  HOST_REQUEST_TIMEOUT_MS,
   HostRequests,
   isHostReply,
   NOT_CONNECTED,
@@ -180,17 +182,18 @@ function recordCommand(method: string, ok: boolean): Promise<void> {
   return logQueue;
 }
 
-// A mod asked for something (only claude.spawn exists). Mods are scripts this
-// extension registered, but the pages they run on are untrusted, so the
+// A mod asked for something (claude.spawn or claude.draft). Mods are scripts
+// this extension registered, but the pages they run on are untrusted, so the
 // message is validated and the host composes the final prompt.
 async function handleUserScriptMessage(message: unknown, senderUrl: string | undefined): Promise<UserScriptReply> {
   const parsed = parseUserScriptMessage(message, senderUrl);
   if (!parsed.ok) return parsed;
   const p = port;
   if (!p || !(await isEnabled())) return { ok: false, error: NOT_CONNECTED };
-  const reply = await hostRequests.request("claude.spawn", parsed.params, (m) => p.postMessage(m));
-  if (!reply.ok) console.warn("claude.spawn failed:", reply.error);
-  void recordCommand("claude.spawn", reply.ok);
+  const timeout = parsed.method === "claude.draft" ? DRAFT_TIMEOUT_MS : HOST_REQUEST_TIMEOUT_MS;
+  const reply = await hostRequests.request(parsed.method, parsed.params, (m) => p.postMessage(m), timeout);
+  if (!reply.ok) console.warn(`${parsed.method} failed:`, reply.error);
+  void recordCommand(parsed.method, reply.ok);
   return reply;
 }
 

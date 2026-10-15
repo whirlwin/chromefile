@@ -319,6 +319,34 @@ describe("extension-initiated requests", () => {
     expect(await host.exited).toBe(0);
   });
 
+  it("serves claude.draft with a stub claude", async () => {
+    const socketPath = newSocketPath();
+    const appDir = dirname(socketPath);
+    const home = mkdtempSync(join(tmpdir(), "chromefile-home-"));
+    mkdirSync(appDir, { recursive: true, mode: 0o700 });
+    const voice = "a plain, friendly voice that keeps things short.";
+    writeFileSync(join(appDir, "config.json"), JSON.stringify({ claude: { personas: { example: voice } } }));
+    const claude = join(home, "claude");
+    writeFileSync(claude, `#!/bin/sh\nprintf '%s' "$@" > '${home}/argv'\ncat > '${home}/stdin'\necho '"It ships today."'\n`);
+    chmodSync(claude, 0o755);
+    const host = await startHost(socketPath, { CHROMEFILE_CLAUDE: claude, HOME: home });
+    const tweet = { author: "Jamie Placeholder", handle: "@jamie", text: "When does the release ship", url: "https://x.com/jamie/status/1" };
+    host.toHost({ id: "x-1", method: "claude.draft", params: { persona: "example", tweet, origin: "https://x.com" } });
+    expect(await host.fromHost.next()).toEqual({ id: "x-1", result: { text: "It ships today." } });
+    expect(readFileSync(join(home, "stdin"), "utf8")).toContain("<tweet>\nAuthor: Jamie Placeholder (@jamie)\n");
+    expect(readFileSync(join(home, "argv"), "utf8")).toContain(`in this voice:\n\n${voice}\n\nRules:\n`);
+    // The log says how long it took, not what the post said.
+    expect(host.stderr()).toMatch(/drafted a reply \(15 characters\)/);
+    expect(host.stderr()).not.toContain("release ship");
+    host.toHost({ id: "x-2", method: "claude.draft", params: { persona: "someone", tweet } });
+    expect(await host.fromHost.next()).toMatchObject({
+      id: "x-2",
+      error: { code: "bad_request", message: expect.stringContaining('persona "someone" is not configured') },
+    });
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+  });
+
   it("reports osascript failures as internal with stderr", async () => {
     const socketPath = newSocketPath();
     const home = mkdtempSync(join(tmpdir(), "chromefile-home-"));

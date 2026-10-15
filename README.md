@@ -134,9 +134,40 @@ Be aware of what this combines: your private email, content written by whoever s
 
 The mod finds Outlook's elements by their English accessibility labels, so it does nothing in a localized Outlook. To test it without an account, open [`mods/test/outlook-fixture.html`](mods/test/outlook-fixture.html), a copy of Outlook's DOM with a stubbed extension API (see the comment at its top).
 
+### Drafting replies in a persona
+
+A mod can ask your local Claude for a short draft reply to a post on X, written in a voice you describe (a persona). None of the mods in this repository use it; it is there for your own (see [Personal config](#personal-config)). From a mod:
+
+```js
+const reply = await chrome.runtime.sendMessage({
+  type: "claude.draft",
+  persona: "plain",                       // a name configured under claude.personas
+  tweet: { text, author, handle, url },   // text is required, the rest optional
+});
+// reply: { ok: true, text: "..." } or { ok: false, error: "..." }
+```
+
+The draft is one or two sentences and at most 280 characters. What happens to it next is up to the mod: put it in front of the user to read, edit and post, and leave the posting to them.
+
+Personas are configured, not built in. Declare them under `claude.personas` and apply the file with `scripts/chrome-apply.sh` (see [Declarative Chrome config](#declarative-chrome-config)), which writes them to `~/Library/Application Support/chromefile/config.json`:
+
+```yaml
+claude:
+  personas:
+    plain: >-
+      Plain and friendly. Short sentences, everyday words, no jargon,
+      and one concrete point rather than general agreement.
+```
+
+A name is lowercase letters, digits and hyphens, starts with a letter and is at most 32 characters; a voice is a non-empty string of at most 4,000 characters. The host puts the voice inside a fixed prompt whose rules are in the code ([`host/src/draft.ts`](host/src/draft.ts)): only the reply text, one or two sentences, no hashtags, no claim to be the person whose voice it is and no signature, the post's language, and the post treated as data rather than instructions. The rules stay in the repository and only the voice comes from your config, so the voices you use can stay out of it. A request for a persona that is not configured fails with an error that says where to add it.
+
+Each request runs one `claude -p` on your Claude account. The host runs it with no tools (`--tools ""`) and no MCP servers (`--strict-mcp-config` with an empty config), in an empty private directory, with the prompt on stdin, and passes the post (author, handle, text and link) marked as untrusted content. A post carrying prompt injection can therefore only change the draft text, which you read before posting it yourself. Hooks and plugins from your Claude Code user settings still load, as for any `claude -p`. See [docs/architecture.md](docs/architecture.md#claudedraft-on-the-host) for the details.
+
+Chrome does not give the host your shell `PATH`, so it looks for `claude` in `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` and then `PATH`. If yours lives elsewhere, set `"claude": { "bin": "/absolute/path/to/claude" }` in `config.json`.
+
 ### Declarative Chrome config
 
-[`chrome.yaml`](chrome.yaml) declares Chrome preferences, extension keyboard shortcuts, where browser-spawned Claude sessions run, and mods; `scripts/chrome-apply.sh` makes Chrome match it:
+[`chrome.yaml`](chrome.yaml) declares Chrome preferences, extension keyboard shortcuts, where browser-spawned Claude sessions run, and mods (the same format also takes [personas](#drafting-replies-in-a-persona)); `scripts/chrome-apply.sh` makes Chrome match it:
 
 ```yaml
 settings:
@@ -146,30 +177,66 @@ shortcuts:
     select-next-tab: Command+J       # command name: manifest-style keybinding
 claude:
   cwd: ~/git                         # working directory of spawned Claude sessions
+  personas:                          # optional: name: voice, for claude.draft
+    plain: Plain and friendly. Short sentences, everyday words, no jargon.
 mods:
   outlook-claude:                    # mod id
     matches: ["https://outlook.cloud.microsoft/*"]
-    file: mods/outlook-claude.js     # relative to the chrome.yaml directory
+    file: mods/outlook-claude.js     # relative to the YAML file's directory
     runAt: document_idle             # optional, the default
     world: USER_SCRIPT               # optional, the default
+    enabled: true                    # optional, the default; false unregisters it
+  example:
+    matches: ["https://example.com/*"]
+    file: mods/example.js            # its code contains __ASSET_LOGO__
+    assets:                          # optional: NAME: https URL of an image
+      LOGO: https://example.com/logo.png
 ```
 
 ```sh
 scripts/chrome-apply.sh                       # apply chrome.yaml
 scripts/chrome-apply.sh --dry-run             # show what would change, change nothing
 scripts/chrome-apply.sh --list-settings tabs  # pref names and current values matching a regex
-scripts/chrome-apply.sh other.yaml            # apply another file
+scripts/chrome-apply.sh chrome.local.yaml     # apply another file, such as your personal config
 ```
 
 It is idempotent: each line reports `unchanged` or `changed` (old -> new), and only differing values are written and then read back. Values keep their YAML type (booleans, numbers, strings, lists, maps). An unknown pref, extension or command is reported, the rest is still applied, and the exit status is non-zero. Keybindings use the manifest format (`Command+J`, `Alt+Shift+K`, `MacCtrl+L`; on macOS `Ctrl` means Command); an empty value clears a shortcut.
 
 `claude.cwd` must be an existing directory (a leading `~` is expanded). It is written as an absolute path to `~/Library/Application Support/chromefile/config.json` (directory `0700`, file `0600`, other keys kept), where the host reads it when it spawns a Claude session.
 
-`mods` are registered through the extension (`chromefile call mods.list` and `mods.register`), so the extension must be connected and **Allow User Scripts** on. A mod whose matches, code, `runAt` or `world` differ from the registered one is re-registered. Mods registered in Chrome but missing from `chrome.yaml` are reported as `extra` and left alone; nothing is ever unregistered (use the `mods_unregister` tool for that). If the extension is not connected the mods are reported as an error, the rest is still applied and the exit status is non-zero.
+`claude.personas` maps persona names to voices for [draft replies](#drafting-replies-in-a-persona). A name matches `^[a-z][a-z0-9-]{0,31}$` and a voice is a non-empty string of at most 4,000 characters; a name or voice that breaks these rules is reported as an error. Each entry is written to `claude.personas.<name>` in the same `config.json`, keeping other keys and other personas. Personas the YAML does not list are left alone, so removing one from the YAML does not remove it from `config.json`. The voice text is never printed: the lines read `unchanged  claude.personas.<name>` or `changed    claude.personas.<name>`, and `would set  claude.personas.<name>` in a dry run.
 
-Requirements: macOS, `chromefile` on your `PATH`, `yq` (`mise install` in this repo), Google Chrome already running (the script never launches it) and **View > Developer > Allow JavaScript from Apple Events** turned on in Chrome. It applies to the profile of the front Chrome window.
+`mods` are registered through the extension (`chromefile call mods.list`, `mods.register` and `mods.unregister`), so the extension must be connected and **Allow User Scripts** on. A mod whose matches, code, `runAt` or `world` differ from the registered one is re-registered. A mod with `enabled: false` (missing means `true`) is unregistered if it is registered (`removed`) and reported as `unchanged` if it is not; its file, matches and assets are not checked or downloaded, so a stale path or asset URL cannot stand in the way of turning it off. Tabs that are already open keep the injected script until they are reloaded, so reload them after turning a mod off or back on. Mods registered in Chrome but missing from the file being applied are reported as `extra` (the line names that file) and left alone, since they may come from another file, such as your [personal config](#personal-config), or have been registered by other means (use the `mods_unregister` tool to remove those); to turn off a mod that a file declares, use `enabled: false` rather than deleting its entry. If the extension is not connected the mods are reported as an error, the rest is still applied and the exit status is non-zero.
+
+A mod's `assets` keep images out of the repository: on every run (dry runs too) each URL is downloaded with `curl` (`https://` only, redirects included), checked to be an image by its bytes and at most 256 KB (the code travels as a command line argument and a native message, which Chrome caps at 1 MiB), and inlined as a `data:` URI wherever the mod's code contains `__ASSET_<NAME>__` (`NAME` matches `[A-Z0-9_]+`). The comparison with the registered mod uses the inlined code, so the mod is re-registered only when the code or the image changed. A failed download is an error for that mod; the others are still applied. `scripts/test/chrome-apply-assets.sh` tests this without Chrome; it sets `CHROMEFILE_ASSET_ALLOW_FILE=1`, a test-only switch that also allows `file://` URLs.
+
+Requirements: macOS, `chromefile` on your `PATH`, `yq` (`mise install` in this repo), and for settings and shortcuts Google Chrome already running (the script never launches it) with **View > Developer > Allow JavaScript from Apple Events** turned on. It applies to the profile of the front Chrome window.
 
 Settings and shortcuts do not use the extension. For them the script drives Chrome through AppleScript: it opens `chrome://settings` and `chrome://extensions/shortcuts` as background tabs, calls the private APIs those pages expose (`chrome.settingsPrivate`, `chrome.developerPrivate`) with `execute javascript`, and closes the tabs again (only the ones it opened).
+
+### Personal config
+
+Mods and personas that are only for you can stay out of the repository. Put their config in `chrome.local.yaml` next to `chrome.yaml` and the mods' code in `mods/local/`; both are gitignored. The file has the same format as `chrome.yaml`, and a relative `file:` resolves against the YAML file's directory, so `file: mods/local/<name>.js` works:
+
+```yaml
+# chrome.local.yaml
+claude:
+  personas:
+    plain: Plain and friendly. Short sentences, everyday words, no jargon.
+mods:
+  my-mod:
+    matches: ["https://example.com/*"]
+    file: mods/local/my-mod.js
+```
+
+Apply it on its own, alongside the shared file:
+
+```sh
+scripts/chrome-apply.sh                     # chrome.yaml
+scripts/chrome-apply.sh chrome.local.yaml   # your own mods and personas
+```
+
+Each run leaves alone the mods its file does not declare (when the file has a `mods` section, it reports the others as `extra`, naming the file it applied) and the personas its file does not list, so the two runs do not undo each other. A Chrome setting, a shortcut, `claude.cwd` or a persona declared in both files ends up with the value from whichever ran last, so keep each in one file.
 
 ### Security
 
@@ -197,6 +264,7 @@ npm run lint && npm test   # extension and host
 npm run build              # extension/dist and host/dist/chromefile-host.js
 scripts/vendor.sh          # build, then copy both into cli/ for the binary to embed
 cd cli && cargo test       # the CLI; see cli/README.md
+scripts/test/chrome-apply-assets.sh   # chrome-apply.sh mod assets, disabled mods and personas (macOS)
 ```
 
 - `cli/extension/` and `cli/host/` are committed copies of the builds, so that `cargo install --git` works without Node. CI rebuilds them and fails if they differ, so run `scripts/vendor.sh` and commit the result after changing the extension or the host.

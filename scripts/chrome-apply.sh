@@ -11,16 +11,30 @@
 # background tabs, drive them, and close them. It needs "Allow JavaScript from
 # Apple Events" (View > Developer) in Chrome.
 #
-# claude.cwd is written to config.json in the chromefile app directory
-# (~/Library/Application Support/chromefile, or CHROMEFILE_HOME), where the
-# host reads it when it spawns a Claude session.
+# claude.cwd and claude.personas (NAME: voice text) are written to
+# config.json in the chromefile app directory (~/Library/Application
+# Support/chromefile, or CHROMEFILE_HOME), where the host reads them when it
+# spawns a Claude session. Other keys and personas in that file are kept, and
+# a voice is never printed.
+#
+# A second file, such as a gitignored chrome.local.yaml with personal mods and
+# personas, is applied the same way: pass its path. Each run leaves alone the
+# mods and personas it does not declare.
 #
 # Mods go through the extension: `chromefile call mods.*` (override the
 # executable with CHROMEFILE_CMD=/path/to/executable, for tests). Each mod's
-# `file` is relative to the directory of the config file. Mods registered in
-# Chrome but missing from the config are reported and left alone, never
-# removed. If the extension is not connected the mods are reported as an error
-# and the rest is still applied.
+# `file` is relative to the directory of the config file. A mod with
+# `enabled: false` (missing means true) is unregistered instead of registered,
+# if it is registered, and its file and assets are left unread. Mods
+# registered in Chrome but missing from the config are reported and left
+# alone, never removed. If the extension is not connected the mods are
+# reported as an error and the rest is still applied.
+#
+# A mod's `assets` (NAME: https URL) are downloaded on every run (images
+# only, at most 256 KB each) and inlined as data: URIs in place of the string
+# __ASSET_<NAME>__ in its code, before it is compared and registered. A failed
+# download is an error for that mod only. Tests may set
+# CHROMEFILE_ASSET_ALLOW_FILE=1 to allow file:// URLs as well.
 #
 # Usage:
 #   scripts/chrome-apply.sh [--dry-run] [path/to/chrome.yaml]
@@ -74,11 +88,16 @@ if [[ "$mode" == apply ]]; then
   yq -e 'type == "!!map"' "$config" > /dev/null 2>&1 || die "$config is not a YAML mapping"
 fi
 
-# Don't launch Chrome: `is running` checks without starting it.
-running="$(osascript -e 'application "Google Chrome" is running')"
-[[ "$running" == true ]] || die "Google Chrome is not running; start it first"
-windows="$(osascript -e 'tell application "Google Chrome" to count windows')"
-((windows > 0)) || die "Google Chrome has no open window; open one first"
+# Only settings and shortcuts drive Chrome through AppleScript; mods go
+# through the extension. Don't launch Chrome: `is running` checks without
+# starting it.
+require_chrome() {
+  local running windows
+  running="$(osascript -e 'application "Google Chrome" is running')"
+  [[ "$running" == true ]] || die "Google Chrome is not running; start it first"
+  windows="$(osascript -e 'tell application "Google Chrome" to count windows')"
+  ((windows > 0)) || die "Google Chrome has no open window; open one first"
+}
 
 # Helper tabs we opened, as "windowId:tabId". Only these are ever closed.
 HELPER_TABS=()
@@ -286,6 +305,7 @@ GET_EXTENSIONS='function(D,done){chrome.developerPrivate.getExtensionsInfo(funct
 SET_COMMAND='function(D,done){chrome.developerPrivate.updateExtensionCommand({extensionId:D.id,commandName:D.command,keybinding:D.keybinding},function(){done(true);});}'
 
 if [[ "$mode" == list ]]; then
+  require_chrome
   open_tab chrome://settings
   tab="$TAB"
   prefs="$(api_ok "$(call_api "$tab" '{}' "$GET_ALL_PREFS")")"
@@ -304,6 +324,7 @@ $dry_run && verb="would set "
 
 # Settings ------------------------------------------------------------------
 if [[ "$(yq '.settings | length' "$config")" != 0 ]]; then
+  require_chrome
   open_tab chrome://settings
   tab="$TAB"
   prefs="$(api_ok "$(call_api "$tab" '{}' "$GET_ALL_PREFS")")"
@@ -335,6 +356,7 @@ fi
 
 # Shortcuts -----------------------------------------------------------------
 if [[ "$(yq '.shortcuts | length' "$config")" != 0 ]]; then
+  require_chrome
   open_tab chrome://extensions/shortcuts
   tab="$TAB"
   exts="$(api_ok "$(call_api "$tab" '{}' "$GET_EXTENSIONS")")"
@@ -384,6 +406,53 @@ fi
 # Settings for Claude Code sessions the bridge spawns, kept in config.json in
 # the app directory. Other keys in that file are preserved.
 CLAUDE_CONFIG="$APP_DIR/config.json"
+claude_config_bad=false
+
+# claude_have EXPR: sets HAVE to EXPR (values in env vars) evaluated on
+# config.json and printed raw, or "" when there is no such file. Returns 1 if
+# the file is not valid JSON, which is reported only once.
+claude_have() {
+  HAVE=""
+  if $claude_config_bad; then
+    return 1
+  fi
+  [[ -s "$CLAUDE_CONFIG" ]] || return 0
+  if ! HAVE="$(yq -p=json -o=json -r "$1" "$CLAUDE_CONFIG" 2> /dev/null)"; then
+    claude_config_bad=true
+    fail "$CLAUDE_CONFIG is not valid JSON; fix or remove it"
+    return 1
+  fi
+}
+
+# claude_set EXPR: applies the yq assignment EXPR (values in env vars) to
+# config.json, keeping every other key. It goes to a private temp file in the
+# app directory that is then moved into place, so the host never reads half a
+# file. Returns 1 after reporting a failure. yq's own message is dropped, as it
+# could quote a value.
+claude_set() {
+  local tmp ok=true
+  mkdir -p "$APP_DIR"
+  chmod 700 "$APP_DIR"
+  tmp="$(umask 077 && mktemp "$APP_DIR/config.json.XXXXXX")"
+  if [[ -s "$CLAUDE_CONFIG" ]]; then
+    yq -p=json -o=json "$1" "$CLAUDE_CONFIG" > "$tmp" 2> /dev/null || ok=false
+  else
+    yq -n -o=json "$1" > "$tmp" 2> /dev/null || ok=false
+  fi
+  if ! $ok; then
+    rm -f "$tmp"
+    fail "could not update $CLAUDE_CONFIG"
+    return 1
+  fi
+  chmod 600 "$tmp"
+  # Called from if/elif conditions, where set -e is off, so check it here.
+  if ! mv -f "$tmp" "$CLAUDE_CONFIG"; then
+    rm -f "$tmp"
+    fail "could not update $CLAUDE_CONFIG"
+    return 1
+  fi
+}
+
 want_cwd="$(yq -r '.claude.cwd // ""' "$config")"
 if [[ -n "$want_cwd" ]]; then
   # Expand a leading ~ only; anything else must already be absolute.
@@ -396,34 +465,57 @@ if [[ -n "$want_cwd" ]]; then
     fail "claude.cwd: directory $want_cwd does not exist"
   else
     want_cwd="$(cd "$want_cwd" && pwd)"
-    have_cwd=""
-    if [[ -s "$CLAUDE_CONFIG" ]]; then
-      if ! have_cwd="$(yq -p=json -r '.claude.cwd // ""' "$CLAUDE_CONFIG" 2> /dev/null)"; then
-        fail "$CLAUDE_CONFIG is not valid JSON; fix or remove it"
-        want_cwd=""
-      fi
-    fi
-    if [[ -z "$want_cwd" ]]; then
+    if ! claude_have '.claude.cwd // ""'; then
       :
-    elif [[ "$have_cwd" == "$want_cwd" ]]; then
+    elif [[ "$HAVE" == "$want_cwd" ]]; then
       echo "unchanged  claude.cwd = $want_cwd"
     elif $dry_run; then
-      echo "$verb claude.cwd: ${have_cwd:-(none)} -> $want_cwd"
-    else
-      mkdir -p "$APP_DIR"
-      chmod 700 "$APP_DIR"
-      tmp="$(umask 077 && mktemp "$APP_DIR/config.json.XXXXXX")"
-      if [[ -s "$CLAUDE_CONFIG" ]]; then
-        CWD="$want_cwd" yq -p=json -o=json '.claude.cwd = strenv(CWD)' "$CLAUDE_CONFIG" > "$tmp"
-      else
-        CWD="$want_cwd" yq -n -o=json '.claude.cwd = strenv(CWD)' > "$tmp"
-      fi
-      chmod 600 "$tmp"
-      mv -f "$tmp" "$CLAUDE_CONFIG"
-      echo "$verb claude.cwd: ${have_cwd:-(none)} -> $want_cwd"
+      echo "$verb claude.cwd: ${HAVE:-(none)} -> $want_cwd"
+    elif CWD="$want_cwd" claude_set '.claude.cwd = strenv(CWD)'; then
+      echo "$verb claude.cwd: ${HAVE:-(none)} -> $want_cwd"
     fi
   fi
 fi
+
+# claude.personas: each NAME: voice is written to .claude.personas[NAME].
+# Personas in the file but not here are kept, as another config file may have
+# set them.
+case "$(yq '.claude.personas | tag' "$config")" in
+  "" | '!!null') ;;
+  '!!map')
+    while IFS= read -r name; do
+      label="claude.personas.$name"
+      if [[ ! "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+        fail "$label: name must be a-z, 0-9 and -, at most 32 characters, starting with a letter"
+        continue
+      fi
+      # Characters of the trimmed text, as the host counts them: split("")
+      # counts characters, where length would count bytes.
+      if [[ "$(N="$name" yq '.claude.personas[strenv(N)] | (tag == "!!str" and (trim | length) > 0 and (trim | split("") | length) <= 4000)' "$config")" != true ]]; then
+        fail "$label: must be a non-empty string of at most 4000 characters"
+        continue
+      fi
+      # Compared and written as a JSON string, as $(...) would strip the
+      # trailing newline of a `|` block.
+      want="$(N="$name" yq -r '.claude.personas[strenv(N)] | to_json(0)' "$config")"
+      N="$name" claude_have '.claude.personas[strenv(N)] | to_json(0)' || break
+      if [[ "$HAVE" == "$want" ]]; then
+        echo "unchanged  $label"
+      elif $dry_run; then
+        echo "$verb $label"
+      elif N="$name" V="$want" claude_set '.claude.personas[strenv(N)] = (strenv(V) | from_json)'; then
+        # Read back: yq leaves a .claude.personas that is not a map as it is.
+        N="$name" claude_have '.claude.personas[strenv(N)] | to_json(0)' || break
+        if [[ "$HAVE" == "$want" ]]; then
+          echo "$verb $label"
+        else
+          fail "could not set $label; is .claude.personas in $CLAUDE_CONFIG a map?"
+        fi
+      fi
+    done < <(yq -r '.claude.personas | keys | .[]' "$config")
+    ;;
+  *) fail "claude.personas must be a map of name: voice" ;;
+esac
 
 # Mods ------------------------------------------------------------------------
 # cf_call METHOD JSON: runs `chromefile call` and sets CF_OUT (stdout) and CF_ERR
@@ -443,7 +535,7 @@ cf_call() {
 # Chrome's defaults filled in, as canonical JSON.
 mod_state() {
   yq -p=json -o=json -I=0 '{
-    "matches": (.matches // []),
+    "matches": (.matches // [] | sort),
     "js": (.js | select(tag == "!!str") // ([.[]? | .code // ""] | join(""))),
     "runAt": (.runAt // "document_idle"),
     "world": (.world // "USER_SCRIPT")
@@ -459,6 +551,87 @@ mod_diff() {
   done
   local IFS=,
   printf '%s' "${out[*]}"
+}
+
+# Assets end up inside the mod's code, which travels as a command line
+# argument to `chromefile call` and then in a native message (1 MiB limit).
+ASSET_MAX_BYTES=262144
+TMP_FILES=()
+trap 'cleanup; rm -f "${TMP_FILES[@]+"${TMP_FILES[@]}"}"' EXIT
+
+# fetch_asset URL TMP: downloads URL to TMP and prints it as a data: URI, or
+# prints an error message and returns 1.
+fetch_asset() {
+  local url="$1" tmp="$2" size mime
+  if [[ "$url" == https://* ]]; then
+    curl -fsSL --proto '=https' --proto-redir '=https' --max-time 30 \
+      --max-filesize "$ASSET_MAX_BYTES" -o "$tmp" "$url" 2> /dev/null || {
+      echo "download failed (or larger than $ASSET_MAX_BYTES bytes): $url"
+      return 1
+    }
+  elif [[ "$url" == file://* && "${CHROMEFILE_ASSET_ALLOW_FILE:-}" == 1 ]]; then
+    cp "${url#file://}" "$tmp" 2> /dev/null || {
+      echo "cannot read $url"
+      return 1
+    }
+  else
+    echo "only https:// URLs are allowed (got $url)"
+    return 1
+  fi
+  size="$(wc -c < "$tmp" | tr -d ' ')"
+  if ((size > ASSET_MAX_BYTES)); then
+    echo "$url is $size bytes, more than $ASSET_MAX_BYTES"
+    return 1
+  fi
+  # The bytes decide the type, not what the server claims.
+  mime="$(file -b --mime-type "$tmp")"
+  if [[ "$mime" != image/* ]]; then
+    echo "$url is $mime, not an image"
+    return 1
+  fi
+  printf 'data:%s;base64,%s' "$mime" "$(base64 < "$tmp" | tr -d '\n')"
+}
+
+# mod_source ID FILE: sets MOD_SRC to a file holding the mod's code with its
+# assets inlined (or FILE itself without assets). Returns 1 after reporting
+# the failure.
+mod_source() {
+  local id="$1" file="$2" label="mods.$1" code name url uri tmp pat out
+  MOD_SRC="$file"
+  if [[ "$(ID="$id" yq '.mods[strenv(ID)].assets | (. == null or tag == "!!map")' "$config")" != true ]]; then
+    fail "$label: assets must be a map of NAME: URL"
+    return 1
+  fi
+  [[ "$(ID="$id" yq '.mods[strenv(ID)].assets // {} | length' "$config")" != 0 ]] || return 0
+  # The x keeps trailing newlines, which $(...) would strip.
+  code="$(cat "$file" && printf x)"
+  code="${code%x}"
+  while IFS= read -r name; do
+    if [[ ! "$name" =~ ^[A-Z0-9_]+$ ]]; then
+      fail "$label: asset name $name must match [A-Z0-9_]+"
+      return 1
+    fi
+    url="$(ID="$id" N="$name" yq -r '.mods[strenv(ID)].assets[strenv(N)] // ""' "$config")"
+    tmp="$(mktemp)"
+    TMP_FILES+=("$tmp")
+    if ! uri="$(fetch_asset "$url" "$tmp")"; then
+      fail "$label: asset $name: $uri"
+      return 1
+    fi
+    # Split around each literal occurrence rather than ${code//pat/rep}:
+    # bash 3.2 (macOS) keeps quotes in the replacement and bash 5.2 expands &
+    # in an unquoted one. No sed either, so nothing is ever an expression.
+    pat="__ASSET_${name}__"
+    out=""
+    while [[ "$code" == *"$pat"* ]]; do
+      out+="${code%%"$pat"*}$uri"
+      code="${code#*"$pat"}"
+    done
+    code="$out$code"
+  done < <(ID="$id" yq -r '.mods[strenv(ID)].assets | keys | .[]' "$config")
+  MOD_SRC="$(mktemp)"
+  TMP_FILES+=("$MOD_SRC")
+  printf '%s' "$code" > "$MOD_SRC"
 }
 
 if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
@@ -477,6 +650,45 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
   if [[ -n "$registered" ]]; then
     while IFS= read -r id; do
       label="mods.$id"
+      # As JSON every YAML boolean reads as true or false and strings stay
+      # quoted, so a typo like `enabled: "no"` fails instead of leaving the mod
+      # on. Empty means the mod is not a map; the file check reports that.
+      enabled="$(ID="$id" yq -o=json -I=0 '.mods[strenv(ID)].enabled' "$config")"
+      case "$enabled" in
+        true | null | "") ;;
+        false)
+          # Turning a mod off only unregisters it. Nothing else is checked or
+          # downloaded, so a stale file or asset URL cannot block that.
+          if [[ "$(ID="$id" yq -p=json '[.[] | select(.id == strenv(ID))] | length' <<< "$registered")" == 0 ]]; then
+            echo "unchanged  $label (disabled)"
+            continue
+          fi
+          if $dry_run; then
+            echo "would remove $label (disabled)"
+            continue
+          fi
+          data="$(ID="$id" yq -n -o=json -I=0 '{"ids": [strenv(ID)]}')"
+          if ! cf_call mods.unregister "$data"; then
+            fail "could not unregister $label: ${CF_ERR:-chromefile call mods.unregister failed}"
+            continue
+          fi
+          if ! cf_call mods.list '{}'; then
+            fail "could not read back $label: ${CF_ERR:-chromefile call mods.list failed}"
+            continue
+          fi
+          registered="$(yq -p=json -o=json -I=0 '.mods // []' <<< "$CF_OUT")"
+          if [[ "$(ID="$id" yq -p=json '[.[] | select(.id == strenv(ID))] | length' <<< "$registered")" != 0 ]]; then
+            fail "unregistered $label but the bridge still reports it"
+            continue
+          fi
+          echo "removed    $label (disabled)"
+          continue
+          ;;
+        *)
+          fail "$label: enabled must be true or false"
+          continue
+          ;;
+      esac
       file="$(ID="$id" yq -r '.mods[strenv(ID)].file // ""' "$config")"
       [[ -z "$file" || "$file" == /* ]] || file="$config_dir/$file"
       if [[ -z "$file" || ! -r "$file" ]]; then
@@ -487,7 +699,8 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
         fail "$label: matches must be a non-empty list of URL patterns"
         continue
       fi
-      data="$(ID="$id" F="$file" yq -o=json -I=0 '.mods[strenv(ID)] | {
+      mod_source "$id" "$file" || continue
+      data="$(ID="$id" F="$MOD_SRC" yq -o=json -I=0 '.mods[strenv(ID)] | {
         "id": strenv(ID),
         "matches": .matches,
         "js": load_str(strenv(F)),
@@ -533,7 +746,7 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
     while IFS= read -r id; do
       [[ -n "$id" ]] || continue
       if [[ "$(ID="$id" yq '.mods | has(strenv(ID))' "$config")" != true ]]; then
-        echo "extra      mods.$id is registered but not in chrome.yaml (left alone)"
+        echo "extra      mods.$id is registered but not in $(basename "$config") (left alone)"
       fi
     done < <(yq -p=json -r '.[].id' <<< "$registered")
   fi

@@ -6,6 +6,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { encodeMessage, MessageDecoder, MessageTooLargeError, MAX_OUTGOING_BYTES } from "./framing";
 import { errorResponse, isObject, type RequestId, type Response } from "./protocol";
 import { ensureSocketDir, socketPath } from "./socket-path";
+import { DraftError, draftReply } from "./draft";
 import { SpawnError, spawnClaude } from "./spawn";
 
 /** A socket line this long cannot become a valid native message anyway. */
@@ -133,9 +134,7 @@ export function runHost(): void {
   // replies to socket clients. Only an allowlist of methods is served.
   async function handleExtensionRequest(id: string, method: string, params: unknown): Promise<void> {
     let response: Response;
-    if (method !== "claude.spawn") {
-      response = errorResponse(id, "bad_request", `Unknown extension request: ${method}`);
-    } else {
+    if (method === "claude.spawn") {
       try {
         const { file, cwd } = await spawnClaude(params);
         log(`spawned Claude in ${cwd} with prompt file ${file}`);
@@ -145,6 +144,20 @@ export function runHost(): void {
         response = errorResponse(id, code, (error as Error).message);
         log(`claude.spawn failed: ${response.error!.message}`);
       }
+    } else if (method === "claude.draft") {
+      // Logs say how it went, never what the post or the draft says.
+      const started = Date.now();
+      try {
+        const { text, claude } = await draftReply(params);
+        log(`drafted a reply (${text.length} characters) with ${claude} in ${Date.now() - started} ms`);
+        response = { id, result: { text } };
+      } catch (error) {
+        const code = error instanceof DraftError ? error.code : "internal";
+        response = errorResponse(id, code, (error as Error).message);
+        log(`claude.draft failed: ${response.error!.message}`);
+      }
+    } else {
+      response = errorResponse(id, "bad_request", `Unknown extension request: ${method}`);
     }
     if (shuttingDown) return;
     try {

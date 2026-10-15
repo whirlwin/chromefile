@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Tests the mod assets, disabled mods (`enabled: false`), claude.personas and
-# the user config of scripts/chrome-apply.sh without Chrome: configs with only
-# mods or claude keys, a stub `chromefile` (CHROMEFILE_CMD) that keeps
-# registered mods in files, an `osascript` on PATH that fails if anything
-# calls it, file:// assets (CHROMEFILE_ASSET_ALLOW_FILE=1), a temp app
+# Tests the mod assets, disabled mods (`enabled: false`), claude.personas,
+# --check and the user config of scripts/chrome-apply.sh without Chrome:
+# configs with only mods or claude keys, a stub `chromefile` (CHROMEFILE_CMD)
+# that keeps registered mods in files, an `osascript` on PATH that fails if
+# anything calls it, file:// assets (CHROMEFILE_ASSET_ALLOW_FILE=1), a temp app
 # directory (CHROMEFILE_HOME) for config.json, and HOME and XDG_CONFIG_HOME
-# inside the temp directory, so your own user config is never read. macOS
+# inside the temp directory, so your own user config is never read. Last, the
+# shortcut strings the script sends Chrome, from its functions alone. macOS
 # only, like the script.
 #
 # Usage: scripts/test/chrome-apply-assets.sh
@@ -338,6 +339,94 @@ check "rejects claude.personas that is not a map, still applies the rest"
 [[ ! -e "$T/osascript-called" ]]
 check "never runs osascript (personas)"
 
+# --check ----------------------------------------------------------------------
+# The dry run's output, with an exit status for drift: 0 in sync, 2 when
+# something would change, 1 on an error, which wins over drift.
+
+# write_check_config VOICE [LINE]: claude.cwd, a persona with VOICE, and a
+# plain mod with LINE (such as its enabled key) added.
+write_check_config() {
+  cat > "$T/chrome.yaml" << EOF2
+claude:
+  cwd: $T/work
+  personas:
+    example: $1 voice-marker
+mods:
+  plain:
+    matches: ["https://example.com/*"]
+    file: plain.js
+    ${2:-}
+EOF2
+}
+
+rm -f "$T"/state/*.json
+rm -rf "${T:?}/home"
+write_check_config "Plain."
+apply --check
+rc=$?
+check_out="$OUT"
+((rc == 2)) && [[ "$OUT" == *"would set  mods.plain: not registered"* && "$OUT" == *"would set  claude.personas.example"* ]] &&
+  [[ "$OUT" == *"would set  claude.cwd: (none) -> $work"* && ! -e "$T/state/plain.json" && ! -e "$T/home/config.json" ]]
+check "--check: a mod not registered is drift (2), and nothing is registered"
+
+apply --check --dry-run
+rc=$?
+((rc == 2)) && [[ "$OUT" == "$check_out" ]]
+check "--check --dry-run is the same as --check"
+
+apply --dry-run
+rc=$?
+((rc == 0)) && [[ "$OUT" == "$check_out" ]]
+check "without --check, a dry run with drift has the same output and exits 0"
+
+apply
+apply --check
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"unchanged  mods.plain"* && "$OUT" == *"unchanged  claude.personas.example"* ]] &&
+  [[ "$OUT" == *"unchanged  claude.cwd = $work"* ]]
+check "--check: in sync is 0"
+
+cp "$T/home/config.json" "$T/before.json"
+write_check_config "Changed."
+apply --check
+rc=$?
+((rc == 2)) && [[ "$OUT" == *"would set  claude.personas.example"* && "$OUT" == *"unchanged  mods.plain"* ]] &&
+  [[ "$OUT" == *"unchanged  claude.cwd"* ]] && cmp -s "$T/before.json" "$T/home/config.json"
+check "--check: a persona that differs is drift (2), and config.json is unchanged"
+
+write_check_config "Plain."
+yq -i -p=json -o=json '.claude.cwd = "/tmp"' "$T/home/config.json"
+cp "$T/home/config.json" "$T/before.json"
+apply --check
+rc=$?
+((rc == 2)) && [[ "$OUT" == *"would set  claude.cwd: /tmp -> $work"* && "$OUT" == *"unchanged  claude.personas.example"* ]] &&
+  cmp -s "$T/before.json" "$T/home/config.json"
+check "--check: a claude.cwd that differs is drift (2), and config.json is unchanged"
+
+apply
+echo '{"id":"stranger","matches":["https://example.com/*"],"js":"x"}' > "$T/state/stranger.json"
+apply --check
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"extra      mods.stranger is registered"* && "$OUT" != *would* ]]
+check "--check: an extra mod is not drift (0)"
+
+write_check_config "Plain." "enabled: false"
+apply --check
+rc=$?
+((rc == 2)) && [[ "$OUT" == *"would remove mods.plain (disabled)"* && -e "$T/state/plain.json" ]]
+check "--check: a registered mod turned off is drift (2), and stays registered"
+
+write_check_config "Changed."
+cat >> "$T/chrome.yaml" << 'EOF2'
+  broken:
+    matches: ["https://example.com/*"]
+    file: missing.js
+EOF2
+apply --check
+rc=$?
+((rc == 1)) && [[ "$OUT" == *"mods.broken: cannot read file"* && "$OUT" == *"would set  claude.personas.example"* ]]
+check "--check: an error (a missing mod file) wins over drift (1)"
+
 # The user config --------------------------------------------------------------
 # Without a path the script applies the chrome.yaml of its own repository and
 # then the user config, so these runs use a copy of the script in $T/repo, with
@@ -355,7 +444,8 @@ mods:
 EOF2
 }
 write_repo_config
-cat > "$T/xdg/chromefile/chrome.yaml" << 'EOF2'
+write_user_config() {
+  cat > "$T/xdg/chromefile/chrome.yaml" << 'EOF2'
 claude:
   personas:
     mine: My own voice. voice-marker
@@ -364,6 +454,8 @@ mods:
     matches: ["https://example.com/*"]
     file: mods/user-mod.js
 EOF2
+}
+write_user_config
 
 # apply_auto [OPTION...]: runs the copy from $T with HOME at $AUTO_HOME
 # (default $T) and XDG_CONFIG_HOME at $XDG (default $T/xdg), output in OUT.
@@ -452,8 +544,83 @@ rc=$?
 ((rc == 1)) && [[ "$OUT" == *"unchanged  mods.repo-mod"*"applying   "*"mods.user-broken: cannot read file"* ]]
 check "an error in the user config gives exit status 1"
 
+rm -f "$T"/state/*.json
+write_repo_config
+write_user_config
+apply_auto
+apply_auto --check
+rc=$?
+((rc == 0)) && [[ "$OUT" == *"unchanged  mods.repo-mod"*"applying   "*"unchanged  mods.user-mod"* && "$OUT" != *would* ]]
+check "--check without a path: both files in sync is 0"
+
+echo 'console.log("user, drifted");' > "$T/xdg/chromefile/mods/user-mod.js"
+apply_auto --check
+rc=$?
+((rc == 2)) && [[ "$OUT" == *"unchanged  mods.repo-mod"*"applying   "*"would set  mods.user-mod: differs in code"* ]] &&
+  [[ "$(yq -p=json -o=json -r '.js' "$T/state/user-mod.json")" != *drifted* ]]
+check "--check without a path: drift only in the user config is 2"
+
+cat >> "$T/repo/chrome.yaml" << 'EOF2'
+  broken:
+    matches: ["https://example.com/*"]
+    file: mods/missing.js
+EOF2
+apply_auto --check
+rc=$?
+((rc == 1)) && [[ "$OUT" == *"mods.broken: cannot read file"*"applying   "*"would set  mods.user-mod: differs in code"* ]]
+check "--check without a path: an error in one file and drift in the other is 1"
+
 [[ ! -e "$T/osascript-called" ]]
 check "never runs osascript (user config)"
+
+# Shortcut strings -------------------------------------------------------------
+# chrome_keybinding needs no Chrome, so it is taken out of the script and run
+# here, with norm_key, which reads the shortcut back. What Chrome makes of the
+# string sent (updateExtensionCommand on macOS: Command is ⌘, Ctrl is ⌃, and
+# MacCtrl is nothing) must be what norm_key reads in the YAML value, or the
+# read back fails.
+eval "$(sed -n -e '/^norm_key() {/,/^}/p' -e '/^chrome_keybinding() {/,/^}/p' "$REPO/scripts/chrome-apply.sh")"
+
+# chrome_shows SENT: the symbols Chrome shows for SENT. A token it does not
+# know stays as text, so it can't match.
+chrome_shows() {
+  local out="" part
+  local -a parts
+  [[ -n "$1" ]] || return 0
+  IFS=+ read -ra parts <<< "$1"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      Command) out+="⌘" ;;
+      Ctrl) out+="⌃" ;;
+      Alt) out+="⌥" ;;
+      Shift) out+="⇧" ;;
+      *) out+="$part" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+OUT=""
+while IFS='|' read -r yaml sent; do
+  got="$(chrome_keybinding "$yaml")"
+  shown="$(chrome_shows "$got")"
+  if [[ "$got" != "$sent" || "$(norm_key "$shown")" != "$(norm_key "$yaml")" ]]; then
+    OUT+="$yaml: sent \"$got\" (want \"$sent\"), Chrome shows \"$shown\""$'\n'
+  fi
+done << 'EOF2'
+Command+J|Command+J
+Cmd+J|Command+J
+command+J|Command+J
+Ctrl+Shift+K|Command+Shift+K
+MacCtrl+L|Ctrl+L
+macctrl+shift+L|Ctrl+Shift+L
+Alt+Shift+K|Alt+Shift+K
+Option+K|Alt+K
+Shift+Command+Comma|Shift+Command+Comma
+|
+EOF2
+[[ -z "$OUT" ]]
+check "sends Ctrl and Command as Command and MacCtrl as Ctrl, as norm_key reads them"
 
 if ((failures)); then
   echo "$failures failure(s)"

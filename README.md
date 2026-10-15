@@ -196,11 +196,14 @@ mods:
 ```sh
 scripts/chrome-apply.sh                       # apply chrome.yaml, then your personal config
 scripts/chrome-apply.sh --dry-run             # show what would change, change nothing
+scripts/chrome-apply.sh --check               # the same, exit 2 if anything would change
 scripts/chrome-apply.sh --list-settings tabs  # pref names and current values matching a regex
 scripts/chrome-apply.sh path/to/chrome.yaml   # apply only that file
 ```
 
-It is idempotent: each line reports `unchanged` or `changed` (old -> new), and only differing values are written and then read back. Values keep their YAML type (booleans, numbers, strings, lists, maps). An unknown pref, extension or command is reported, the rest is still applied, and the exit status is non-zero. Keybindings use the manifest format (`Command+J`, `Alt+Shift+K`, `MacCtrl+L`; on macOS `Ctrl` means Command); an empty value clears a shortcut.
+It is idempotent: each line reports `unchanged` or `changed` (old -> new), and only differing values are written and then read back. Values keep their YAML type (booleans, numbers, strings, lists, maps). An unknown pref, extension or command is reported, the rest is still applied, and the exit status is non-zero. Keybindings use the manifest format (`Command+J`, `Alt+Shift+K`, `MacCtrl+L`; on macOS `Ctrl` means Command); an empty value clears a shortcut. The script translates them for `chrome.developerPrivate`, which reads `Ctrl` as the Control key and does not know `MacCtrl`.
+
+`--check` is the dry run for a cron job or a login hook: the same output, with an exit status that says whether Chrome matches the config. 0 means in sync (`unchanged` and `extra` lines only), 2 means something would change (a `would set` or `would remove` line), and 1 means an error, which wins over drift. Without a path, the two runs are combined the same way. It changes nothing, but it is not passive: settings and shortcuts still open their helper tabs in Chrome (so Chrome must be running, or the check exits 1), and mod assets are still downloaded.
 
 `claude.cwd` must be an existing directory (a leading `~` is expanded). It is written as an absolute path to `~/Library/Application Support/chromefile/config.json` (directory `0700`, file `0600`, other keys kept), where the host reads it when it spawns a Claude session.
 
@@ -229,7 +232,7 @@ mods:
     file: mods/my-mod.js
 ```
 
-Without a path, `scripts/chrome-apply.sh` applies `chrome.yaml` and then, if it exists, your personal config, with an `applying   ~/.config/chromefile/chrome.yaml` line before the second file's lines. Each file gets a run of its own, so your personal config is applied even when the run for `chrome.yaml` fails (Chrome not running, for example), and the exit status is non-zero if either run had errors. Given a path, the script applies only that file:
+Without a path, `scripts/chrome-apply.sh` applies `chrome.yaml` and then, if it exists, your personal config, with an `applying   ~/.config/chromefile/chrome.yaml` line before the second file's lines. Each file gets a run of its own, so your personal config is applied even when the run for `chrome.yaml` fails (Chrome not running, for example), and the exit status is non-zero if either run had errors. With `--check` it is 1 if either run had errors, else 2 if either found drift. Given a path, the script applies only that file:
 
 ```sh
 scripts/chrome-apply.sh                                   # chrome.yaml, then your personal config

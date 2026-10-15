@@ -871,7 +871,25 @@ fn exists_exactly(path: &Path) -> bool {
         .is_ok_and(|mut entries| entries.any(|e| e.is_ok_and(|e| e.file_name() == name)))
 }
 
-pub fn run(path: Option<PathBuf>, dry_run: bool, app: &str) -> ExitCode {
+/// The exit status for a run that reported these lines: 1 if any setting
+/// failed; else, with `check`, 2 if any setting would change, which means
+/// Chrome does not match the file; else 0. An unsupported setting is not
+/// drift: no run can change it.
+pub fn exit_status(lines: &[Line], check: bool) -> u8 {
+    let has = |outcome| lines.iter().any(|l| l.outcome == outcome);
+    if has(Outcome::Failed) {
+        1
+    } else if check && has(Outcome::WouldChange) {
+        2
+    } else {
+        0
+    }
+}
+
+/// Applies the Chromefile at `path` (or the first in `default_locations`).
+/// `check` is a dry run whose exit status reports drift (see `exit_status`).
+pub fn run(path: Option<PathBuf>, dry_run: bool, check: bool, app: &str) -> ExitCode {
+    let dry_run = dry_run || check;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let pretty = |p: &Path| pretty_path(p, home.as_deref());
 
@@ -947,10 +965,8 @@ pub fn run(path: Option<PathBuf>, dry_run: bool, app: &str) -> ExitCode {
     let lines = execute(&plan(&settings, &state), &mut browser, dry_run);
     drop(browser);
 
-    let mut failed = false;
     for line in &lines {
         if line.outcome == Outcome::Failed {
-            failed = true;
             eprintln!("{line}");
         } else {
             println!("{line}");
@@ -960,11 +976,7 @@ pub fn run(path: Option<PathBuf>, dry_run: bool, app: &str) -> ExitCode {
         eprintln!("interrupted");
         return ExitCode::from(130);
     }
-    if failed {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::from(exit_status(&lines, check))
 }
 
 #[cfg(test)]
@@ -1926,6 +1938,91 @@ mod tests {
         assert!(chrome.setters().is_empty());
         assert_eq!(chrome.pref, Some(Value::Bool(false)));
         assert_eq!(chrome.ours(NEXT), "⌥J");
+    }
+
+    #[test]
+    fn exit_status_reports_drift_only_when_checking() {
+        use Outcome::{Changed, Failed, Unchanged, Unsupported, WouldChange};
+        let status = |outcomes: &[Outcome], check| {
+            let lines: Vec<Line> = outcomes.iter().map(|&o| Line::new("x", o, "")).collect();
+            exit_status(&lines, check)
+        };
+        // In sync. An unsupported setting is not drift.
+        assert_eq!(status(&[], true), 0);
+        assert_eq!(status(&[Unchanged, Unchanged], true), 0);
+        assert_eq!(status(&[Unsupported], true), 0);
+        assert_eq!(status(&[Unchanged, Unsupported], true), 0);
+        // Drift.
+        assert_eq!(status(&[Unchanged, WouldChange], true), 2);
+        assert_eq!(status(&[Unsupported, WouldChange], true), 2);
+        // An error beats drift.
+        assert_eq!(status(&[Failed], true), 1);
+        assert_eq!(
+            status(&[WouldChange, Failed, Unsupported, Unchanged], true),
+            1
+        );
+        // Without --check, as before: only a failure is 1.
+        assert_eq!(status(&[WouldChange, Unchanged], false), 0);
+        assert_eq!(status(&[Changed, Unsupported], false), 0);
+        assert_eq!(status(&[WouldChange, Failed], false), 1);
+    }
+
+    /// A Chrome that can't be reached, as when it is not running.
+    struct NotRunning;
+
+    impl Browser for NotRunning {
+        fn vertical_tabs(&mut self) -> Result<Option<Value>> {
+            bail!("Google Chrome is not running; start it first")
+        }
+
+        fn set_vertical_tabs(&mut self, _: bool) -> Result<bool> {
+            unreachable!("a dry run sets nothing")
+        }
+
+        fn vertical_tabs_now(&mut self) -> Result<Value> {
+            unreachable!("a dry run reads nothing back")
+        }
+
+        fn extensions(&mut self) -> Result<Vec<ChromeExtension>> {
+            bail!("Google Chrome is not running; start it first")
+        }
+
+        fn set_command(&mut self, _: &str, _: &str) -> Result<()> {
+            unreachable!("a dry run sets nothing")
+        }
+    }
+
+    /// What `--check` exits with for `src`.
+    fn check(src: &str, chrome: &mut impl Browser) -> u8 {
+        let settings = resolve(&file(src), Platform::Mac);
+        let state = read_state(&settings, chrome);
+        exit_status(&execute(&plan(&settings, &state), chrome, true), true)
+    }
+
+    #[test]
+    fn check_compares_the_file_with_chrome_and_changes_nothing() {
+        let src = "version: 1\ntabs:\n  layout: vertical\nhotkeys:\n  tab.next: Command+J\n";
+        let mut chrome = Fake::new(Some(true), &[(NEXT, "Command+J")]);
+        assert_eq!(check(src, &mut chrome), 0);
+        let mut chrome = Fake::new(Some(false), &[(NEXT, "Command+J")]);
+        assert_eq!(check(src, &mut chrome), 2);
+        assert!(chrome.setters().is_empty());
+        assert_eq!(chrome.pref, Some(Value::Bool(false)));
+        // Only unsupported: in sync, and Chrome is not asked.
+        let mut chrome = Fake::new(Some(false), &[(NEXT, "Command+J")]);
+        assert_eq!(
+            check(
+                "version: 1\nhotkeys:\n  tab.next: Command+Alt+J\n",
+                &mut chrome
+            ),
+            0
+        );
+        assert!(chrome.calls.is_empty(), "{:?}", chrome.calls);
+        // A setting that would fail is an error, whatever else would change.
+        let mut chrome = Fake::new(Some(false), &[]);
+        assert_eq!(check(src, &mut chrome), 1);
+        // So is a Chrome that can't be reached.
+        assert_eq!(check(src, &mut NotRunning), 1);
     }
 
     #[test]

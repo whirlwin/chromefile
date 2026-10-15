@@ -8,6 +8,7 @@ chromefile install --replace        # also replace an extension copy loaded from
 chromefile status                   # show what is installed (read-only)
 chromefile uninstall                # remove everything except config.json and sessions/
 chromefile apply [--dry-run] [PATH] # apply a Chromefile (tab layout, hotkeys) to Chrome
+chromefile apply --check [PATH]     # exit 2 if Chrome does not match the file, change nothing
 chromefile mcp                      # the MCP server over stdio; Claude Code runs this
 chromefile call <method> [json]     # one request to the extension, result as JSON
 ```
@@ -106,7 +107,7 @@ note: kept ~/Library/Application Support/chromefile/config.json and ~/Library/Ap
 ### apply
 
 ```sh
-chromefile apply [--dry-run] [PATH]
+chromefile apply [--dry-run | --check] [PATH]
 ```
 
 Applies a Chromefile ([SPEC.md](../SPEC.md)) to the running Google Chrome. It supports Chromefile specification version 1 and refuses files with any other `version`.
@@ -121,8 +122,9 @@ Applies a Chromefile ([SPEC.md](../SPEC.md)) to the running Google Chrome. It su
 - **Requirements.** As for install's Chrome steps: exactly one Chrome running, with a window, and **Allow JavaScript from Apple Events** on. Accessibility permission is not needed. Helper tabs are opened only for settings that need them and closed again, also on errors and Ctrl-C. A file with no setting that needs Chrome (only `version`, say) does not touch Chrome; one whose values already match still reads them.
 - **Outcomes.** One line per setting: `changed`, `unchanged`, `failed` (on stderr) or `unsupported`. Chrome reports no error when it does not take a shortcut, so a value that does not read back as set is `failed`, never skipped. A failure does not stop the other settings.
 - **Dry run.** `--dry-run` reads Chrome but changes nothing, and reports `would change` for each setting a real run would change.
+- **Check.** `--check` answers "does Chrome match the file?", for a cron job or a login hook. It is a dry run, with the same output, whose exit status reports drift: 0 when Chrome matches (every setting `unchanged` or `unsupported`, which no run can change), 2 when at least one setting would change, and 1 on an error (no file, a file that can't be read or is invalid, Chrome out of reach, a setting that would be `failed`). An error wins over drift. It still reads Chrome through helper tabs, so the requirements above apply and a chrome://settings or chrome://extensions tab opens in the background and closes again while it runs; if Chrome is not running, each setting that needs it is `failed` and the status is 1. `--check --dry-run` is the same as `--check`.
 - **Built-in shortcuts.** A hotkey that replaces one of Chrome's own macOS shortcuts (`Command+Shift+J` for Downloads, `Command+T`, `Command+W` and a few more, from Google's [Chrome keyboard shortcuts](https://support.google.com/chrome/answer/157179) page) prints a `warning:` line. Warnings do not change the exit status.
-- **Exit status.** 0 when every setting is `changed`, `unchanged`, `unsupported` or (in a dry run) `would change`; 1 when no file is found, the file can't be read or is invalid, or any setting `failed`; 130 when interrupted.
+- **Exit status.** 0 when every setting is `changed`, `unchanged`, `unsupported` or (in a dry run without `--check`) `would change`; 1 when no file is found, the file can't be read or is invalid, or any setting `failed`; 2 with `--check` when a setting would change and none failed; 130 when interrupted.
 - **Other systems.** apply validates the file the same way, then reports each setting `unsupported` (or `unchanged` for a hotkey without a value for that platform) and exits 0.
 
 ```text

@@ -64,10 +64,18 @@ enum Cmd {
     /// Reports each setting as changed, unchanged, failed or unsupported, and
     /// exits 1 if the file is invalid or any setting failed. Hotkeys need the
     /// Chromefile extension (chromefile install).
+    ///
+    /// --check is a dry run whose exit status says whether Chrome matches the
+    /// file, for cron or a login hook: 0 in sync, 2 when a setting would
+    /// change, 1 on an error.
     Apply {
         /// Report what would change without changing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Like --dry-run, but exit 2 when a setting would change (0 when
+        /// Chrome matches the file, 1 on an error).
+        #[arg(long)]
+        check: bool,
         /// The Chromefile to apply. Default: ./Chromefile if it exists, else
         /// $XDG_CONFIG_HOME/chromefile/Chromefile (~/.config/chromefile/Chromefile).
         path: Option<PathBuf>,
@@ -178,7 +186,11 @@ fn main() -> ExitCode {
         Cmd::Host { args } => return run_node("host", &args),
         // Before the macOS check: validating a file works anywhere, and apply
         // reports what it can't do elsewhere per setting.
-        Cmd::Apply { dry_run, path } => return apply::run(path, dry_run, &chrome_app()),
+        Cmd::Apply {
+            dry_run,
+            check,
+            path,
+        } => return apply::run(path, dry_run, check, &chrome_app()),
         Cmd::Install { skip_extension, .. }
         | Cmd::Status { skip_extension }
         | Cmd::Uninstall { skip_extension } => (cli.command, skip_extension),

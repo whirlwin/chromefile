@@ -44,9 +44,16 @@
 # download is an error for that mod only. Tests may set
 # CHROMEFILE_ASSET_ALLOW_FILE=1 to allow file:// URLs as well.
 #
+# --dry-run reports what would change and changes nothing. --check is that dry
+# run, with the same output, for cron or a login hook: its exit status says
+# whether Chrome matches the config. 0: in sync (`unchanged` and `extra` lines
+# are not drift). 2: something would change. 1: an error, which wins over
+# drift. Without a path the two runs are combined the same way. It still opens
+# helper tabs in Chrome for settings and shortcuts and downloads mod assets.
+#
 # Usage:
-#   scripts/chrome-apply.sh [--dry-run]                      repo file, then user config
-#   scripts/chrome-apply.sh [--dry-run] path/to/chrome.yaml  only that file
+#   scripts/chrome-apply.sh [--dry-run | --check]                      repo file, then user config
+#   scripts/chrome-apply.sh [--dry-run | --check] path/to/chrome.yaml  only that file
 #   scripts/chrome-apply.sh --list-settings [regex]
 set -euo pipefail
 
@@ -63,11 +70,16 @@ die() {
 
 mode=apply
 dry_run=false
+check=false
 config=""
 filter=""
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true ;;
+    --check)
+      check=true
+      dry_run=true
+      ;;
     --list-settings)
       mode=list
       if (($# > 1)) && [[ "$2" != --* ]]; then
@@ -113,18 +125,30 @@ command -v yq > /dev/null || die "yq not found; run 'mise install' in $REPO"
 # _CHROMEFILE_OTHER_REPORTS_EXTRA=1 says its run comes later and lists the
 # registered mods too, so the extra ones are left to it and reported once.
 if [[ "$mode" == apply && -z "$config" && -e "$USER_CONFIG" ]]; then
-  dry=()
-  $dry_run && dry=(--dry-run)
+  opts=()
+  $dry_run && opts=(--dry-run)
+  $check && opts=(--check)
   # The same test as the Mods section below: a mapping with a mods section.
   user_lists_mods=""
   [[ "$(yq 'select(type == "!!map") | .mods | length' "$USER_CONFIG" 2> /dev/null)" =~ ^[1-9] ]] &&
     user_lists_mods=1
-  rc=0
+  repo_rc=0
   _CHROMEFILE_OTHER_CONFIG="$USER_CONFIG" _CHROMEFILE_OTHER_REPORTS_EXTRA="$user_lists_mods" \
-    "$BASH" "${BASH_SOURCE[0]}" ${dry[@]+"${dry[@]}"} "$REPO/chrome.yaml" || rc=1
+    "$BASH" "${BASH_SOURCE[0]}" ${opts[@]+"${opts[@]}"} "$REPO/chrome.yaml" || repo_rc=$?
   echo "applying   $(show_path "$USER_CONFIG")"
+  user_rc=0
   _CHROMEFILE_OTHER_CONFIG="$REPO/chrome.yaml" _CHROMEFILE_OTHER_REPORTS_EXTRA="" \
-    "$BASH" "${BASH_SOURCE[0]}" ${dry[@]+"${dry[@]}"} "$USER_CONFIG" || rc=1
+    "$BASH" "${BASH_SOURCE[0]}" ${opts[@]+"${opts[@]}"} "$USER_CONFIG" || user_rc=$?
+  # Without --check any failed run gives 1. With it, a run's 2 (drift) gives 2
+  # unless either run had an error (any other non-zero status), which wins.
+  rc=0
+  for run_rc in "$repo_rc" "$user_rc"; do
+    if $check && ((run_rc == 2)); then
+      ((rc == 1)) || rc=2
+    elif ((run_rc != 0)); then
+      rc=1
+    fi
+  done
   exit "$rc"
 fi
 config="${config:-$REPO/chrome.yaml}"
@@ -346,6 +370,33 @@ norm_key() {
     "$(tr '[:lower:]' '[:upper:]' <<< "$key")"
 }
 
+# chrome_keybinding BINDING: a shortcut in the manifest format, as
+# developerPrivate.updateExtensionCommand must get it on macOS. That call
+# skips the translation Chrome gives a manifest's suggested_key: to it
+# `Command` is ⌘, `Ctrl` is the Control key and `MacCtrl` is no key at all, so
+# it would set nothing (after removing the old shortcut all the same). So
+# Command, Cmd and Ctrl become Command and MacCtrl becomes Ctrl, which is how
+# norm_key reads them, and Option becomes Alt. The key, and "" (which clears
+# the shortcut), stay as they are.
+chrome_keybinding() {
+  local s="$1" out="" part i n
+  local -a parts
+  [[ -n "$s" ]] || return 0
+  IFS=+ read -ra parts <<< "$s"
+  n=${#parts[@]}
+  for ((i = 0; i < n - 1; i++)); do
+    part="${parts[i]}"
+    case "$(tr '[:upper:]' '[:lower:]' <<< "$part")" in
+      command | cmd | ctrl) part=Command ;;
+      macctrl) part=Ctrl ;;
+      alt | option) part=Alt ;;
+      shift) part=Shift ;;
+    esac
+    out+="$part+"
+  done
+  printf '%s%s' "$out" "${parts[n - 1]}"
+}
+
 GET_ALL_PREFS='function(D,done){chrome.settingsPrivate.getAllPrefs(function(ps){done(ps.map(function(p){return {key:p.key,value:p.value===undefined?null:p.value};}));});}'
 GET_PREF='function(D,done){chrome.settingsPrivate.getPref(D.key,function(p){done(p?(p.value===undefined?null:p.value):null);});}'
 SET_PREF='function(D,done){chrome.settingsPrivate.setPref(D.key,D.value,"",done);}'
@@ -366,6 +417,13 @@ failures=0
 fail() {
   echo "error: $*" >&2
   failures=$((failures + 1))
+}
+# would LINE: prints a line of a dry run about something it would change.
+# Each one is drift for --check.
+drift=0
+would() {
+  printf '%s\n' "$1"
+  drift=$((drift + 1))
 }
 verb="changed   "
 $dry_run && verb="would set "
@@ -389,7 +447,7 @@ if [[ "$(yq '.settings | length' "$config")" != 0 ]]; then
       continue
     fi
     if $dry_run; then
-      echo "$verb settings.$key: $have -> $want"
+      would "$verb settings.$key: $have -> $want"
       continue
     fi
     ok="$(api_ok "$(call_api "$tab" "$data" "$SET_PREF")")"
@@ -434,10 +492,11 @@ if [[ "$(yq '.shortcuts | length' "$config")" != 0 ]]; then
         continue
       fi
       if $dry_run; then
-        echo "$verb $label: ${have:-(none)} -> ${want:-(none)}"
+        would "$verb $label: ${have:-(none)} -> ${want:-(none)}"
         continue
       fi
-      data="$(ID="$id" CMD="$cmd" KB="$want_raw" yq -n -o=json -I=0 '{"id": strenv(ID), "command": strenv(CMD), "keybinding": strenv(KB)}')"
+      keybinding="$(chrome_keybinding "$want_raw")"
+      data="$(ID="$id" CMD="$cmd" KB="$keybinding" yq -n -o=json -I=0 '{"id": strenv(ID), "command": strenv(CMD), "keybinding": strenv(KB)}')"
       api_ok "$(call_api "$tab" "$data" "$SET_COMMAND")" > /dev/null
       exts="$(api_ok "$(call_api "$tab" '{}' "$GET_EXTENSIONS")")"
       now="$(norm_key "$(ID="$id" CMD="$cmd" yq -p=json -r '.[] | select(.id == strenv(ID)) | .commands[] | select(.name == strenv(CMD)) | .keybinding' <<< "$exts")")"
@@ -518,7 +577,7 @@ if [[ -n "$want_cwd" ]]; then
     elif [[ "$HAVE" == "$want_cwd" ]]; then
       echo "unchanged  claude.cwd = $want_cwd"
     elif $dry_run; then
-      echo "$verb claude.cwd: ${HAVE:-(none)} -> $want_cwd"
+      would "$verb claude.cwd: ${HAVE:-(none)} -> $want_cwd"
     elif CWD="$want_cwd" claude_set '.claude.cwd = strenv(CWD)'; then
       echo "$verb claude.cwd: ${HAVE:-(none)} -> $want_cwd"
     fi
@@ -550,7 +609,7 @@ case "$(yq '.claude.personas | tag' "$config")" in
       if [[ "$HAVE" == "$want" ]]; then
         echo "unchanged  $label"
       elif $dry_run; then
-        echo "$verb $label"
+        would "$verb $label"
       elif N="$name" V="$want" claude_set '.claude.personas[strenv(N)] = (strenv(V) | from_json)'; then
         # Read back: yq leaves a .claude.personas that is not a map as it is.
         N="$name" claude_have '.claude.personas[strenv(N)] | to_json(0)' || break
@@ -712,7 +771,7 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
             continue
           fi
           if $dry_run; then
-            echo "would remove $label (disabled)"
+            would "would remove $label (disabled)"
             continue
           fi
           data="$(ID="$id" yq -n -o=json -I=0 '{"ids": [strenv(ID)]}')"
@@ -771,7 +830,7 @@ if [[ "$(yq '.mods | length' "$config")" != 0 ]]; then
         done_what="updated ($diff)"
       fi
       if $dry_run; then
-        echo "$verb $label: $what"
+        would "$verb $label: $what"
         continue
       fi
       if ! cf_call mods.register "$data"; then
@@ -812,4 +871,8 @@ if ((failures)); then
     echo "$failures error(s); the rest was applied" >&2
   fi
   exit 1
+fi
+# Something would change, so Chrome does not match the config.
+if $check && ((drift)); then
+  exit 2
 fi

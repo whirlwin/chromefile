@@ -1,11 +1,15 @@
 // src/constants.ts
 var NATIVE_HOST_NAME = "io.whirlwin.chromefile";
 var ENABLED_KEY = "enabled";
+var DUPLICATES_KEY = "duplicates";
 var STATUS_KEY = "status";
 var LOG_KEY = "log";
 var LOG_LIMIT = 50;
 function userScriptsHint(extensionId) {
   return `Enable 'Allow User Scripts' on the extension's Details page (chrome://extensions/?id=${extensionId})`;
+}
+function duplicatesSetting(stored) {
+  return stored === "ask" ? "ask" : "allow";
 }
 
 // src/commandLog.ts
@@ -68,11 +72,11 @@ async function isOurs(tabId) {
   return targets.some((t) => t.tabId === tabId && t.attached && t.extensionId === chrome.runtime.id);
 }
 async function sendCommand(tabId, method, params, timeoutMs = CDP_TIMEOUT_MS) {
-  const run = async () => {
+  const run2 = async () => {
     await ensureAttached(tabId);
     return await chrome.debugger.sendCommand({ tabId }, method, params);
   };
-  return withTimeout(run(), timeoutMs, method);
+  return withTimeout(run2(), timeoutMs, method);
 }
 async function detachAll() {
   const targets = await chrome.debugger.getTargets().catch(() => []);
@@ -118,6 +122,200 @@ function toErrorBody(error) {
 }
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/duplicatePrompt.ts
+function showDuplicatePrompt(count) {
+  const MESSAGE_TYPE = "duplicates.closeOlder";
+  const MARKER = "data-chromefile-duplicates";
+  const HIDE_MS = 15e3;
+  const style = (node, styles) => {
+    for (const [name, value] of Object.entries(styles)) node.style.setProperty(name, value, "important");
+  };
+  const make = (tag, text, styles) => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    style(node, styles);
+    return node;
+  };
+  for (const old of document.querySelectorAll(`[${MARKER}]`)) old.remove();
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const colors = dark ? { bg: "#1e1f22", fg: "#e6e6e6", muted: "#9ca3af", border: "#3a3b3f", shadow: "rgba(0, 0, 0, 0.5)" } : { bg: "#ffffff", fg: "#1f2328", muted: "#6b7280", border: "#e5e7eb", shadow: "rgba(0, 0, 0, 0.15)" };
+  const accent = "#d97757";
+  const host = document.createElement("div");
+  host.setAttribute(MARKER, "");
+  style(host, { all: "initial" });
+  style(host, { position: "fixed", top: "16px", right: "16px", "z-index": "2147483647" });
+  const root = host.attachShadow({ mode: "closed" });
+  const card = make("div", "", {
+    display: "block",
+    "box-sizing": "border-box",
+    "max-width": "320px",
+    padding: "12px 14px",
+    "border-radius": "10px",
+    border: `1px solid ${colors.border}`,
+    background: colors.bg,
+    color: colors.fg,
+    "box-shadow": `0 6px 24px ${colors.shadow}`,
+    "font-family": "system-ui, -apple-system, sans-serif",
+    "font-size": "13px",
+    "line-height": "1.4"
+  });
+  const label = make("div", "Chromefile", { "font-size": "11px", color: colors.muted, "margin-bottom": "4px" });
+  const message = make("div", count === 1 ? "Already open in 1 other tab" : `Already open in ${count} other tabs`, {});
+  const buttons = make("div", "", { display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "10px" });
+  const button = (text, primary) => {
+    const node = make("button", text, {
+      padding: "5px 10px",
+      "border-radius": "6px",
+      border: `1px solid ${primary ? accent : colors.border}`,
+      background: primary ? accent : "transparent",
+      color: primary ? "#ffffff" : colors.fg,
+      "font-family": "inherit",
+      "font-size": "inherit",
+      "font-weight": "600",
+      cursor: "pointer"
+    });
+    node.type = "button";
+    return node;
+  };
+  const closeButton = button(count === 1 ? "Close older tab" : "Close older tabs", true);
+  const keepButton = button("Keep", false);
+  let timer;
+  const hide = () => {
+    clearTimeout(timer);
+    host.remove();
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(hide, HIDE_MS);
+  };
+  closeButton.addEventListener("click", (event) => {
+    if (!event.isTrusted) return;
+    hide();
+    try {
+      chrome.runtime.sendMessage({ type: MESSAGE_TYPE }).catch(() => {
+      });
+    } catch {
+    }
+  });
+  keepButton.addEventListener("click", (event) => {
+    if (event.isTrusted) hide();
+  });
+  card.addEventListener("mouseenter", () => clearTimeout(timer));
+  card.addEventListener("mouseleave", arm);
+  buttons.append(keepButton, closeButton);
+  card.append(label, message, buttons);
+  root.append(card);
+  document.documentElement.append(host);
+  if (document.visibilityState === "visible") {
+    arm();
+  } else {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onVisible);
+      if (host.isConnected) arm();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+  }
+}
+
+// src/duplicates.ts
+var CLOSE_OLDER = "duplicates.closeOlder";
+var QUIET_MS = 1e4;
+var STARTED_AT_KEY = "startedAt";
+var BLANK_URLS = /* @__PURE__ */ new Set(["chrome://newtab/", "chrome://new-tab-page/", "about:blank"]);
+var newTabKey = (tabId) => `newTab:${tabId}`;
+var bridgeTabKey = (tabId) => `bridgeTab:${tabId}`;
+function pageKey(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    parsed.hash = "";
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+function olderDuplicates(tab, tabs) {
+  const key = pageKey(tab.url);
+  if (key === null) return [];
+  return tabs.filter(
+    (other) => other.id !== tab.id && !other.pinned && other.incognito === tab.incognito && pageKey(other.url) === key
+  );
+}
+function isBlankPage(url) {
+  return !url || BLANK_URLS.has(url);
+}
+function inQuietPeriod(createdAt, startedAt) {
+  return typeof startedAt === "number" && createdAt < startedAt + QUIET_MS;
+}
+async function asking() {
+  const stored = await chrome.storage.local.get(DUPLICATES_KEY);
+  return duplicatesSetting(stored[DUPLICATES_KEY]) === "ask";
+}
+async function markBridgeTab(tabId) {
+  try {
+    await chrome.storage.session.set({ [bridgeTabKey(tabId)]: true });
+  } catch (error) {
+    console.warn("duplicates: could not mark bridge tab", tabId, error);
+  }
+}
+async function tabCreated(tab) {
+  if (tab.id === void 0) return;
+  const now = Date.now();
+  const [ask, session] = await Promise.all([asking(), chrome.storage.session.get(STARTED_AT_KEY)]);
+  if (!ask || inQuietPeriod(now, session[STARTED_AT_KEY])) return;
+  await chrome.storage.session.set({ [newTabKey(tab.id)]: now });
+}
+async function tabLoaded(tab) {
+  const tabId = tab.id;
+  if (tabId === void 0) return;
+  const key = newTabKey(tabId);
+  const session = await chrome.storage.session.get([key, STARTED_AT_KEY]);
+  const createdAt = session[key];
+  if (createdAt === void 0 || isBlankPage(tab.url)) return;
+  await chrome.storage.session.remove(key);
+  if (typeof createdAt === "number" && inQuietPeriod(createdAt, session[STARTED_AT_KEY])) return;
+  if (pageKey(tab.url) === null || !await asking()) return;
+  const count = olderDuplicates(tab, await chrome.tabs.query({})).length;
+  if (count === 0) return;
+  const bridgeKey = bridgeTabKey(tabId);
+  if ((await chrome.storage.session.get(bridgeKey))[bridgeKey] !== void 0) return;
+  await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: showDuplicatePrompt, args: [count] });
+}
+async function closeOlder(tabId) {
+  if (!await asking()) return { closed: 0 };
+  const tab = await chrome.tabs.get(tabId);
+  const ids = olderDuplicates(tab, await chrome.tabs.query({})).flatMap((other) => other.id === void 0 ? [] : [other.id]);
+  if (ids.length > 0) await chrome.tabs.remove(ids);
+  return { closed: ids.length };
+}
+function run(what, task) {
+  task().catch((error) => console.warn(`duplicates: ${what} failed`, error));
+}
+function initDuplicates() {
+  chrome.runtime.onStartup.addListener(
+    () => run("startup", async () => chrome.storage.session.set({ [STARTED_AT_KEY]: Date.now() }))
+  );
+  chrome.tabs.onCreated.addListener((tab) => run("tab created", () => tabCreated(tab)));
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (changeInfo.status === "complete") run("tab loaded", () => tabLoaded(tab));
+  });
+  chrome.tabs.onRemoved.addListener(
+    (tabId) => run("tab removed", async () => chrome.storage.session.remove([newTabKey(tabId), bridgeTabKey(tabId)]))
+  );
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (typeof message !== "object" || message === null || message.type !== CLOSE_OLDER) return;
+    const tabId = sender.tab?.id;
+    if (sender.id !== chrome.runtime.id || tabId === void 0 || sender.frameId !== 0) return;
+    closeOlder(tabId).then(sendResponse, (error) => {
+      console.warn("duplicates: closing older tabs failed", error);
+      sendResponse({ closed: 0 });
+    });
+    return true;
+  });
 }
 
 // src/chromePath.ts
@@ -356,9 +554,9 @@ async function userScripts() {
 }
 var registerQueue = Promise.resolve();
 function serialized(task) {
-  const run = registerQueue.then(task, task);
-  registerQueue = run.catch(() => void 0);
-  return run;
+  const run2 = registerQueue.then(task, task);
+  registerQueue = run2.catch(() => void 0);
+  return run2;
 }
 var modsMethods = {
   "mods.list": async () => {
@@ -495,6 +693,7 @@ var tabsMethods = {
   },
   "tabs.open": async (params) => {
     const tab = await chrome.tabs.create({ url: str(params, "url"), active: optBool(params, "active") ?? true });
+    if (tab.id !== void 0) await markBridgeTab(tab.id);
     return { tab: summarize(tab) };
   },
   "tabs.close": async (params) => {
@@ -705,6 +904,7 @@ async function setStatus(status) {
 }
 initDebugger();
 initShortcuts();
+initDuplicates();
 chrome.runtime.onUserScriptMessage?.addListener((message, sender, sendResponse) => {
   handleUserScriptMessage(message, sender.url).then(
     sendResponse,

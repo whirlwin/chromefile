@@ -57,13 +57,13 @@ enum Cmd {
         #[arg(long)]
         skip_extension: bool,
     },
-    /// Apply a Chromefile (tab layout, hotkeys) to Chrome. Supports Chromefile
-    /// specification version 1.
+    /// Apply a Chromefile (tab layout, duplicate tabs, hotkeys) to Chrome.
+    /// Supports Chromefile specification version 1.
     ///
     /// Validates the whole file first and changes nothing if it is invalid.
     /// Reports each setting as changed, unchanged, failed or unsupported, and
-    /// exits 1 if the file is invalid or any setting failed. Hotkeys need the
-    /// Chromefile extension (chromefile install).
+    /// exits 1 if the file is invalid or any setting failed. Duplicate tabs
+    /// and hotkeys need the Chromefile extension (chromefile install).
     ///
     /// --check is a dry run whose exit status says whether Chrome matches the
     /// file, for cron or a login hook: 0 in sync, 2 when a setting would

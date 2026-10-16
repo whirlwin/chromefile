@@ -3,6 +3,7 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
+  duplicates: ask           # ask | allow
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around

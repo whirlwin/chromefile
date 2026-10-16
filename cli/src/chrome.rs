@@ -5,7 +5,10 @@
 //! chrome://settings pages, so we open such a page as a background tab and
 //! run JavaScript in it with AppleScript's `execute javascript`. That returns
 //! only a synchronous result, so async calls store their JSON result in a
-//! window variable that we poll.
+//! window variable that we poll. The Chromefile extension's own page
+//! apply.html is opened the same way; script from AppleScript has no
+//! chrome.* APIs there, so the page relays requests to the extension (see
+//! apply.rs).
 //!
 //! Safety rules, kept from the bridge's chrome-apply.sh:
 //! - Values reach AppleScript as osascript arguments (`on run argv`), never by
@@ -250,6 +253,16 @@ fn parse_call_result(raw: &str) -> Result<CallResult> {
 #[derive(Clone, Debug)]
 pub struct Tab {
     url: String,
+}
+
+/// The URL a helper tab for `page` is opened at and found again by, which
+/// must be the URL Chrome reports for it. Chrome reports chrome://settings
+/// as chrome://settings/, so a page without a file name gets that slash
+/// before the query. A file such as chrome-extension://<id>/apply.html must
+/// not: apply.html/ names another file.
+fn helper_url(page: &str, marker: &str) -> String {
+    let sep = if page.ends_with(".html") { "?" } else { "/?" };
+    format!("{page}{sep}chromefile={marker}")
 }
 
 // Chrome scripts. "__APP__" is replaced by a name that passed valid_app_name.
@@ -521,13 +534,14 @@ impl Chrome {
 
     /// Opens a page such as chrome://settings in a background tab of the
     /// front window and waits for it to load. A marker in the query makes
-    /// the URL unique; see `Tab`.
+    /// the URL unique; see `Tab` and `helper_url`.
     pub fn open_tab(&mut self, page: &str) -> Result<Tab> {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
+        let marker = format!("{:x}{:x}", std::process::id(), nanos);
         let tab = Tab {
-            url: format!("{page}/?chromefile={:x}{:x}", std::process::id(), nanos),
+            url: helper_url(page, &marker),
         };
         // Recorded before it exists: Ctrl-C while the script runs fails the
         // call even when Chrome has made the tab, and Drop must still close
@@ -673,6 +687,22 @@ mod tests {
         assert!(js.starts_with("(function(){window.__cf=undefined;"));
         assert!(js.contains("(function(D,done){done(D.id);})(D,"));
         assert!(js.ends_with("return 'started';})()"));
+    }
+
+    #[test]
+    fn helper_urls_are_the_urls_chrome_reports() {
+        assert_eq!(
+            helper_url("chrome://settings", "1f2e"),
+            "chrome://settings/?chromefile=1f2e"
+        );
+        assert_eq!(
+            helper_url("chrome://extensions", "1f2e"),
+            "chrome://extensions/?chromefile=1f2e"
+        );
+        assert_eq!(
+            helper_url("chrome-extension://abc/apply.html", "1f2e"),
+            "chrome-extension://abc/apply.html?chromefile=1f2e"
+        );
     }
 
     #[test]

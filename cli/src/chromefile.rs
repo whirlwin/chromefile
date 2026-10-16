@@ -27,6 +27,22 @@ impl Layout {
     }
 }
 
+/// `tabs.duplicates` (section 5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Duplicates {
+    Ask,
+    Allow,
+}
+
+impl Duplicates {
+    pub fn name(self) -> &'static str {
+        match self {
+            Duplicates::Ask => "ask",
+            Duplicates::Allow => "allow",
+        }
+    }
+}
+
 /// The action registry (section 6.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -328,6 +344,7 @@ impl Hotkey {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Chromefile {
     pub layout: Option<Layout>,
+    pub duplicates: Option<Duplicates>,
     /// In file order.
     pub hotkeys: Vec<(Action, Hotkey)>,
 }
@@ -483,7 +500,7 @@ fn validate(doc: &Yaml) -> Result<Chromefile, Vec<String>> {
     for (k, v) in top {
         match key_str(k) {
             Some("version") => {}
-            Some("tabs") => file.layout = tabs(v, &mut errors),
+            Some("tabs") => tabs(v, &mut file, &mut errors),
             Some("hotkeys") => file.hotkeys = hotkeys(v, &mut errors),
             _ => errors.push(format!(
                 "{}: unknown key (allowed: version, tabs, hotkeys)",
@@ -499,30 +516,31 @@ fn validate(doc: &Yaml) -> Result<Chromefile, Vec<String>> {
     }
 }
 
-fn tabs(v: &Yaml, errors: &mut Vec<String>) -> Option<Layout> {
+fn tabs(v: &Yaml, file: &mut Chromefile, errors: &mut Vec<String>) {
     let Yaml::Hash(m) = v else {
         errors.push(format!("tabs: must be a mapping, not {}", describe(v)));
-        return None;
+        return;
     };
-    let mut layout = None;
     for (k, v) in m {
-        if key_str(k) != Some("layout") {
-            errors.push(format!(
-                "tabs.{}: unknown key (allowed: layout)",
-                key_name(k)
-            ));
-            continue;
-        }
-        match key_str(v) {
-            Some("vertical") => layout = Some(Layout::Vertical),
-            Some("horizontal") => layout = Some(Layout::Horizontal),
-            _ => errors.push(format!(
+        match (key_str(k), key_str(v)) {
+            (Some("layout"), Some("vertical")) => file.layout = Some(Layout::Vertical),
+            (Some("layout"), Some("horizontal")) => file.layout = Some(Layout::Horizontal),
+            (Some("layout"), _) => errors.push(format!(
                 "tabs.layout: must be vertical or horizontal, not {}",
                 describe(v)
             )),
+            (Some("duplicates"), Some("ask")) => file.duplicates = Some(Duplicates::Ask),
+            (Some("duplicates"), Some("allow")) => file.duplicates = Some(Duplicates::Allow),
+            (Some("duplicates"), _) => errors.push(format!(
+                "tabs.duplicates: must be ask or allow, not {}",
+                describe(v)
+            )),
+            _ => errors.push(format!(
+                "tabs.{}: unknown key (allowed: layout, duplicates)",
+                key_name(k)
+            )),
         }
     }
-    layout
 }
 
 fn hotkeys(v: &Yaml, errors: &mut Vec<String>) -> Vec<(Action, Hotkey)> {
@@ -725,6 +743,7 @@ mod tests {
             };
             // Fixtures added later only have to be rejected.
             let want = match name {
+                "bad-duplicates" => "tabs.duplicates:",
                 "bad-layout" => "tabs.layout:",
                 "command-and-ctrl"
                 | "empty-platform-mapping"
@@ -748,10 +767,11 @@ mod tests {
     #[test]
     fn parses_the_example() {
         let f = parse(
-            "version: 1\ntabs:\n  layout: vertical\nhotkeys:\n  tab.next: Command+J\n  tab.previous: Command+K\n",
+            "version: 1\ntabs:\n  layout: vertical\n  duplicates: ask\nhotkeys:\n  tab.next: Command+J\n  tab.previous: Command+K\n",
         )
         .unwrap();
         assert_eq!(f.layout, Some(Layout::Vertical));
+        assert_eq!(f.duplicates, Some(Duplicates::Ask));
         assert_eq!(
             f.hotkeys,
             vec![
@@ -888,7 +908,7 @@ mod tests {
             errors("tabs:\n  side: left\n"),
             vec![
                 "version: missing; add version: 1 (this tool supports version 1)",
-                "tabs.side: unknown key (allowed: layout)",
+                "tabs.side: unknown key (allowed: layout, duplicates)",
             ]
         );
     }
@@ -902,11 +922,35 @@ mod tests {
             vec![
                 "1: unknown key (allowed: version, tabs, hotkeys)",
                 "tabs.layout: must be vertical or horizontal, not \"diagonal\"",
-                "tabs.side: unknown key (allowed: layout)",
+                "tabs.side: unknown key (allowed: layout, duplicates)",
                 "hotkeys.tab.close: unknown action (allowed: tab.next, tab.previous)",
                 "hotkeys.tab.next.windowz: unknown platform (allowed: mac, windows, linux, default)",
             ]
         );
+    }
+
+    #[test]
+    fn parses_tabs_duplicates() {
+        for want in [Duplicates::Ask, Duplicates::Allow] {
+            let f = parse(&format!(
+                "version: 1\ntabs:\n  duplicates: {}\n",
+                want.name()
+            ))
+            .unwrap();
+            assert_eq!(f.duplicates, Some(want));
+            assert_eq!(f.layout, None);
+        }
+        for (value, shown) in [
+            ("true", "the boolean true"),
+            ("yes", "\"yes\""),
+            ("Ask", "\"Ask\""),
+            ("[ask]", "a list"),
+        ] {
+            assert_eq!(
+                one_error(&format!("version: 1\ntabs:\n  duplicates: {value}\n")),
+                format!("tabs.duplicates: must be ask or allow, not {shown}")
+            );
+        }
     }
 
     #[test]

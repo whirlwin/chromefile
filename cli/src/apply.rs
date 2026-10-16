@@ -9,6 +9,12 @@
 //!
 //! - `tabs.layout` is Chrome's pref vertical_tabs.enabled, read and set with
 //!   chrome.settingsPrivate on a chrome://settings helper tab.
+//! - `tabs.duplicates` is the Chromefile extension's own setting, kept in its
+//!   chrome.storage.local, read and set on a helper tab of the extension's
+//!   page apply.html. JavaScript from AppleScript runs there in a world of
+//!   its own, which shares the page's DOM but has no chrome.* APIs, so it
+//!   sends the page a DOM event and the page, which has them, answers with
+//!   another.
 //! - `hotkeys` are the commands of the Chromefile extension, set with
 //!   chrome.developerPrivate on a chrome://extensions helper tab. Every
 //!   extension's commands are read, to see who holds a shortcut first.
@@ -36,7 +42,9 @@
 //! every shortcut back.
 
 use crate::chrome::{self, CallResult, Chrome, Tab};
-use crate::chromefile::{self, Action, Binding, Chromefile, Combo, Layout, Modifier, Platform};
+use crate::chromefile::{
+    self, Action, Binding, Chromefile, Combo, Duplicates, Layout, Modifier, Platform,
+};
 use crate::commands::{preflight, pretty_path};
 use crate::setup::EXTENSION_ID;
 use anyhow::{Result, bail};
@@ -48,6 +56,13 @@ use std::process::ExitCode;
 
 const VERTICAL_TABS_PREF: &str = "vertical_tabs.enabled";
 const MAC_ONLY: &str = "chromefile apply changes Chrome on macOS only";
+/// The Chromefile extension's chrome.storage.local key for tabs.duplicates.
+const DUPLICATES_KEY: &str = "duplicates";
+/// What a tab of apply.html without the page's ready marker means: Chrome
+/// has no Chromefile extension (or has it turned off), or one built before
+/// apply.html, so it shows some other page there.
+const NO_APPLY_PAGE: &str = "the Chromefile extension did not answer on its apply page (not \
+                             installed or out of date); run chromefile install";
 
 /// The Chromefile extension's command for each action; the commands are
 /// declared in extension/static/manifest.json.
@@ -116,6 +131,8 @@ impl fmt::Display for Line {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
     Layout(Layout),
+    /// The Chromefile extension's setting, on macOS.
+    Duplicates(Duplicates),
     /// Bind the extension command to this, on macOS.
     Hotkey {
         command: &'static str,
@@ -133,16 +150,27 @@ pub struct Setting {
 
 /// Each setting in the file, in file order, and what it asks for on
 /// `platform`. Settings absent from the file are not listed (section 7.6).
+/// The parser does not keep the order of the keys within `tabs`, so those
+/// come in the order of SPEC.md section 5.
 pub fn resolve(file: &Chromefile, platform: Platform) -> Vec<Setting> {
     let mut out = Vec::new();
+    let on_mac = |want: Want| {
+        if platform == Platform::Mac {
+            want
+        } else {
+            Want::Done(Outcome::Unsupported, MAC_ONLY.into())
+        }
+    };
     if let Some(layout) = file.layout {
         out.push(Setting {
             item: "tabs.layout".into(),
-            want: if platform == Platform::Mac {
-                Want::Layout(layout)
-            } else {
-                Want::Done(Outcome::Unsupported, MAC_ONLY.into())
-            },
+            want: on_mac(Want::Layout(layout)),
+        });
+    }
+    if let Some(duplicates) = file.duplicates {
+        out.push(Setting {
+            item: "tabs.duplicates".into(),
+            want: on_mac(Want::Duplicates(duplicates)),
         });
     }
     for (action, hotkey) in &file.hotkeys {
@@ -270,6 +298,14 @@ impl ChromeExtension {
     }
 }
 
+/// The setting a value the extension reports stands for, if any. Its apply
+/// page reports what it stores under the names SPEC.md section 5.2 uses.
+fn duplicates_named(value: &str) -> Option<Duplicates> {
+    [Duplicates::Ask, Duplicates::Allow]
+        .into_iter()
+        .find(|d| d.name() == value)
+}
+
 /// The Chromefile extension, if Chrome has it.
 fn ours(extensions: &[ChromeExtension]) -> Option<&ChromeExtension> {
     extensions.iter().find(|e| e.id == EXTENSION_ID)
@@ -284,6 +320,9 @@ pub struct State {
     /// The value of vertical_tabs.enabled; None when this Chrome has no such
     /// pref.
     pub vertical_tabs: Read<Option<Value>>,
+    /// The Chromefile extension's tabs.duplicates setting, as its apply page
+    /// reports it; None when the extension did not answer there.
+    pub duplicates: Read<Option<String>>,
     /// Every extension Chrome has, with its commands.
     pub extensions: Read<Vec<ChromeExtension>>,
 }
@@ -391,6 +430,11 @@ pub enum Step {
         layout: Layout,
         detail: String,
     },
+    SetDuplicates {
+        item: String,
+        duplicates: Duplicates,
+        detail: String,
+    },
     SetHotkey {
         item: String,
         command: &'static str,
@@ -448,6 +492,25 @@ fn step(s: &Setting, state: &State) -> Step {
                 Outcome::Unsupported,
                 format!("Chrome's {VERTICAL_TABS_PREF} is {other}, not true or false"),
             ),
+        },
+        Want::Duplicates(want) => match &state.duplicates {
+            Err(e) => report(Outcome::Failed, e.clone()),
+            Ok(None) => report(Outcome::Failed, NO_APPLY_PAGE.into()),
+            Ok(Some(have)) => match duplicates_named(have) {
+                Some(d) if d == *want => report(Outcome::Unchanged, have.clone()),
+                Some(_) => Step::SetDuplicates {
+                    item: s.item.clone(),
+                    duplicates: *want,
+                    detail: format!("{have} -> {}", want.name()),
+                },
+                None => report(
+                    Outcome::Failed,
+                    format!(
+                        "the Chromefile extension reports {DUPLICATES_KEY} as {have:?}, not ask \
+                         or allow (out of date?); run chromefile install"
+                    ),
+                ),
+            },
         },
         Want::Hotkey { command, binding } => match &state.extensions {
             Err(e) => report(Outcome::Failed, e.clone()),
@@ -535,14 +598,15 @@ fn fail_taken(steps: &mut [Step], state: &State) {
     }
 }
 
-/// The order to carry out the steps in. Hotkeys come last, ordered so that
-/// each combination is free when it is set: a hotkey waits while another
-/// command this run sets still has its combination, because setting that
-/// command first drops it (fact A). Clearing a hotkey needs nothing, so it
-/// never waits. Only a cycle, such as two hotkeys swapping, can't be ordered
-/// that way. Then the first in file order goes first, and Chrome moves its
-/// combination from the other command (fact D), which this run sets next
-/// anyway. `fail_taken` has ruled out every other holder.
+/// The order to carry out the steps in. The other settings hold no
+/// shortcut, so they go first, in file order. Hotkeys come last, ordered so
+/// that each combination is free when it is set: a hotkey waits while
+/// another command this run sets still has its combination, because setting
+/// that command first drops it (fact A). Clearing a hotkey needs nothing, so
+/// it never waits. Only a cycle, such as two hotkeys swapping, can't be
+/// ordered that way. Then the first in file order goes first, and Chrome
+/// moves its combination from the other command (fact D), which this run
+/// sets next anyway. `fail_taken` has ruled out every other holder.
 fn run_order(steps: &[Step], state: &State) -> Vec<usize> {
     let has_now = |command: &str, binding: &Binding| {
         state
@@ -627,6 +691,13 @@ pub trait Browser {
     fn set_vertical_tabs(&mut self, on: bool) -> Result<bool>;
     /// Reads it back with getPref.
     fn vertical_tabs_now(&mut self) -> Result<Value>;
+    /// The Chromefile extension's tabs.duplicates setting as its apply page
+    /// reports it, "allow" when the extension stores none; None when the
+    /// page has no ready marker.
+    fn duplicates(&mut self) -> Result<Option<String>>;
+    /// Stores it through the apply page; an error, with the page's reason,
+    /// when the page refuses.
+    fn set_duplicates(&mut self, value: &str) -> Result<()>;
     /// Every extension, enabled or not, with its commands.
     fn extensions(&mut self) -> Result<Vec<ChromeExtension>>;
     /// Binds one of the Chromefile extension's commands, written as
@@ -642,6 +713,11 @@ pub fn read_state(settings: &[Setting], browser: &mut impl Browser) -> State {
     State {
         vertical_tabs: if wants(|w| matches!(w, Want::Layout(_))) {
             browser.vertical_tabs().map_err(read_err)
+        } else {
+            Ok(None)
+        },
+        duplicates: if wants(|w| matches!(w, Want::Duplicates(_))) {
+            browser.duplicates().map_err(read_err)
         } else {
             Ok(None)
         },
@@ -677,6 +753,20 @@ fn set_layout(browser: &mut impl Browser, layout: Layout) -> Read<()> {
     }
 }
 
+/// Sets the extension's tabs.duplicates and reads it back.
+fn set_duplicates(browser: &mut impl Browser, duplicates: Duplicates) -> Read<()> {
+    let want = duplicates.name();
+    browser.set_duplicates(want).map_err(|e| format!("{e:#}"))?;
+    match browser.duplicates().map_err(|e| format!("{e:#}"))? {
+        Some(now) if now == want => Ok(()),
+        Some(now) => Err(format!(
+            "set {want} but the Chromefile extension reports {}",
+            duplicates_named(&now).map_or_else(|| format!("{now:?}"), |d| d.name().into())
+        )),
+        None => Err(NO_APPLY_PAGE.into()),
+    }
+}
+
 /// Sets a command's binding and reads it back. Chrome reports no error for
 /// a shortcut it does not take (facts A and C), so only the read back counts.
 fn set_hotkey(browser: &mut impl Browser, command: &str, binding: &Binding) -> Read<()> {
@@ -703,7 +793,9 @@ pub fn execute(plan: &Plan, browser: &mut impl Browser, dry_run: bool) -> Vec<Li
     for &i in &plan.order {
         lines[i] = Some(match &plan.steps[i] {
             Step::Report(line) => line.clone(),
-            Step::SetLayout { item, detail, .. } | Step::SetHotkey { item, detail, .. }
+            Step::SetLayout { item, detail, .. }
+            | Step::SetDuplicates { item, detail, .. }
+            | Step::SetHotkey { item, detail, .. }
                 if dry_run =>
             {
                 Line::new(item, Outcome::WouldChange, detail.clone())
@@ -713,6 +805,14 @@ pub fn execute(plan: &Plan, browser: &mut impl Browser, dry_run: bool) -> Vec<Li
                 layout,
                 detail,
             } => match set_layout(browser, *layout) {
+                Ok(()) => Line::new(item, Outcome::Changed, detail.clone()),
+                Err(why) => Line::new(item, Outcome::Failed, why),
+            },
+            Step::SetDuplicates {
+                item,
+                duplicates,
+                detail,
+            } => match set_duplicates(browser, *duplicates) {
                 Ok(()) => Line::new(item, Outcome::Changed, detail.clone()),
                 Err(why) => Line::new(item, Outcome::Failed, why),
             },
@@ -735,21 +835,56 @@ pub fn execute(plan: &Plan, browser: &mut impl Browser, dry_run: bool) -> Vec<Li
 
 // Chrome ------------------------------------------------------------------------
 
-// Functions run on chrome://settings and chrome://extensions as func(D, done);
-// see chrome::build_call_js. getAllPrefs lists every pref the settings page
-// may show, so only the one asked for is sent back. getExtensionsInfo is
-// asked for disabled and terminated extensions too, as the extensions page
-// asks: their shortcuts still hold a key (fact D).
+// Functions run on chrome://settings, chrome://extensions and the
+// extension's apply.html as func(D, done); see chrome::build_call_js.
+// getAllPrefs lists every pref the settings page may show, so only the one
+// asked for is sent back. getExtensionsInfo is asked for disabled and
+// terminated extensions too, as the extensions page asks: their shortcuts
+// still hold a key (fact D).
+//
+// RELAY runs on apply.html without chrome.* APIs (see the module comment).
+// It sends {id, method, key, value} to the page as a chromefile:request
+// event and waits for the chromefile:reply with the same id: {id, ok: true,
+// value} with what is stored after the request, or {id, ok: false, error}.
+// The details are JSON strings because only strings cross between the two
+// worlds. A page without the ready marker answers {missing: true} at once;
+// one that never replies runs into Chrome::call's timeout.
 const GET_LISTED_PREF: &str = "function(D,done){chrome.settingsPrivate.getAllPrefs(function(ps){var p=ps.filter(function(p){return p.key===D.key;})[0];done(p?{value:p.value===undefined?null:p.value}:null);});}";
 const GET_PREF: &str = "function(D,done){chrome.settingsPrivate.getPref(D.key,function(p){done(p?{value:p.value===undefined?null:p.value}:null);});}";
 const SET_PREF: &str = "function(D,done){chrome.settingsPrivate.setPref(D.key,D.value,'',function(ok){done(ok===true);});}";
 const GET_EXTENSIONS: &str = "function(D,done){chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true},function(es){done((es||[]).map(function(e){return {id:e.id,name:e.name,commands:(e.commands||[]).map(function(c){return {name:c.name,keybinding:c.keybinding||'',isActive:c.isActive!==false};})};}));});}";
 const SET_COMMAND: &str = "function(D,done){chrome.developerPrivate.updateExtensionCommand({extensionId:D.id,commandName:D.command,keybinding:D.keybinding},function(){done(true);});}";
+const RELAY: &str = "function(D,done){var el=document.documentElement;if(!el||el.dataset.chromefileApply!=='1'){done({missing:true});return;}var id='cf'+Date.now()+'-'+Math.random().toString(36).slice(2);function h(e){var r;try{r=JSON.parse(e.detail);}catch(x){return;}if(!r||r.id!==id)return;document.removeEventListener('chromefile:reply',h);done(r);}document.addEventListener('chromefile:reply',h);var q={id:id,method:D.method,key:D.key};if(D.value!==undefined)q.value=D.value;document.dispatchEvent(new CustomEvent('chromefile:request',{detail:JSON.stringify(q)}));}";
+
+/// What RELAY reports: the value the extension stores, or None when the page
+/// has no ready marker.
+fn relay_reply(reply: &Value) -> Result<Option<String>> {
+    if reply["missing"] == Value::Bool(true) {
+        return Ok(None);
+    }
+    match (&reply["ok"], &reply["value"], &reply["error"]) {
+        (Value::Bool(true), Value::String(v), _) => Ok(Some(v.clone())),
+        (Value::Bool(false), _, Value::String(e)) => bail!("the Chromefile extension refused: {e}"),
+        _ => bail!("the Chromefile extension's apply page answered {reply}"),
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Page {
     Settings,
     Extensions,
+    /// The Chromefile extension's apply.html.
+    Apply,
+}
+
+impl Page {
+    fn url(self) -> String {
+        match self {
+            Page::Settings => "chrome://settings".into(),
+            Page::Extensions => "chrome://extensions".into(),
+            Page::Apply => format!("chrome-extension://{EXTENSION_ID}/apply.html"),
+        }
+    }
 }
 
 /// The running Chrome. The session and each helper tab are set up when
@@ -760,6 +895,7 @@ struct ChromeBrowser {
     session: Option<Read<Chrome>>,
     settings: Option<Read<Tab>>,
     extensions: Option<Read<Tab>>,
+    apply: Option<Read<Tab>>,
 }
 
 impl ChromeBrowser {
@@ -769,6 +905,7 @@ impl ChromeBrowser {
             session: None,
             settings: None,
             extensions: None,
+            apply: None,
         }
     }
 
@@ -781,15 +918,26 @@ impl ChromeBrowser {
             Ok(chrome) => chrome,
             Err(e) => bail!("{e}"),
         };
-        let (slot, url) = match page {
-            Page::Settings => (&mut self.settings, "chrome://settings"),
-            Page::Extensions => (&mut self.extensions, "chrome://extensions"),
+        let slot = match page {
+            Page::Settings => &mut self.settings,
+            Page::Extensions => &mut self.extensions,
+            Page::Apply => &mut self.apply,
         };
-        let tab =
-            match slot.get_or_insert_with(|| chrome.open_tab(url).map_err(|e| format!("{e:#}"))) {
-                Ok(tab) => tab,
-                Err(e) => bail!("{e}"),
-            };
+        let open = |chrome: &mut Chrome| {
+            chrome.open_tab(&page.url()).map_err(|e| match page {
+                // A Chrome without the extension, or with one built before
+                // apply.html, may show a page there that never loads.
+                Page::Apply if !crate::chrome::interrupted() => format!(
+                    "{e:#}; if the Chromefile extension is missing or out of date, run \
+                     chromefile install"
+                ),
+                _ => format!("{e:#}"),
+            })
+        };
+        let tab = match slot.get_or_insert_with(|| open(chrome)) {
+            Ok(tab) => tab,
+            Err(e) => bail!("{e}"),
+        };
         chrome.call(tab, data, func)
     }
 }
@@ -817,6 +965,25 @@ impl Browser for ChromeBrowser {
         match self.call(Page::Settings, &data, GET_PREF)? {
             Ok(v) => Ok(v["value"].clone()),
             Err(e) => bail!("Chrome refused to read {VERTICAL_TABS_PREF}: {e}"),
+        }
+    }
+
+    fn duplicates(&mut self) -> Result<Option<String>> {
+        let data = json!({ "method": "get", "key": DUPLICATES_KEY });
+        match self.call(Page::Apply, &data, RELAY)? {
+            Ok(reply) => relay_reply(&reply),
+            Err(e) => bail!("the Chromefile extension's apply page failed: {e}"),
+        }
+    }
+
+    fn set_duplicates(&mut self, value: &str) -> Result<()> {
+        let data = json!({ "method": "set", "key": DUPLICATES_KEY, "value": value });
+        match self.call(Page::Apply, &data, RELAY)? {
+            Ok(reply) => match relay_reply(&reply)? {
+                Some(_) => Ok(()),
+                None => bail!(NO_APPLY_PAGE),
+            },
+            Err(e) => bail!("the Chromefile extension's apply page failed: {e}"),
         }
     }
 
@@ -1116,6 +1283,16 @@ mod tests {
         pref: Option<Value>,
         /// What setPref answers; when false nothing changes.
         accept_pref: bool,
+        /// What the extension stores under duplicates; None for nothing.
+        stored_duplicates: Option<String>,
+        /// Whether apply.html has its ready marker: false for a Chrome
+        /// without the extension, or with one built before the page.
+        apply_page: bool,
+        /// Whether a set reaches the storage; when false the page answers
+        /// as if it did, and only the read back can tell.
+        accept_duplicates: bool,
+        /// The reason the page refuses each set with, if it does.
+        refuse_duplicates: Option<String>,
         extensions: Vec<FakeExtension>,
         /// How shortcuts are shown.
         text: fn(&Accelerator) -> String,
@@ -1129,6 +1306,10 @@ mod tests {
             let mut fake = Fake {
                 pref: pref.map(Value::Bool),
                 accept_pref: true,
+                stored_duplicates: None,
+                apply_page: true,
+                accept_duplicates: true,
+                refuse_duplicates: None,
                 extensions: Vec::new(),
                 text: shortcut_text,
                 calls: Vec::new(),
@@ -1190,6 +1371,27 @@ mod tests {
         fn vertical_tabs_now(&mut self) -> Result<Value> {
             self.calls.push("getPref".into());
             Ok(self.pref.clone().unwrap_or(Value::Null))
+        }
+
+        fn duplicates(&mut self) -> Result<Option<String>> {
+            self.calls.push("getDuplicates".into());
+            // Like the real page, nothing stored reads as allow.
+            let stored = self.stored_duplicates.as_deref().unwrap_or("allow");
+            Ok(self.apply_page.then(|| stored.to_string()))
+        }
+
+        fn set_duplicates(&mut self, value: &str) -> Result<()> {
+            self.calls.push(format!("setDuplicates {value}"));
+            if !self.apply_page {
+                bail!("no apply page");
+            }
+            if let Some(why) = &self.refuse_duplicates {
+                bail!("{why}");
+            }
+            if self.accept_duplicates {
+                self.stored_duplicates = Some(value.into());
+            }
+            Ok(())
         }
 
         fn extensions(&mut self) -> Result<Vec<ChromeExtension>> {
@@ -1341,7 +1543,7 @@ mod tests {
     #[test]
     fn resolves_for_the_platform() {
         let f = file(
-            "version: 1\ntabs:\n  layout: vertical\nhotkeys:\n  tab.next: Command+J\n  tab.previous:\n    windows: Alt+K\n",
+            "version: 1\ntabs:\n  layout: vertical\n  duplicates: ask\nhotkeys:\n  tab.next: Command+J\n  tab.previous:\n    windows: Alt+K\n",
         );
         assert_eq!(
             resolve(&f, Platform::Mac),
@@ -1349,6 +1551,10 @@ mod tests {
                 Setting {
                     item: "tabs.layout".into(),
                     want: Want::Layout(Layout::Vertical)
+                },
+                Setting {
+                    item: "tabs.duplicates".into(),
+                    want: Want::Duplicates(Duplicates::Ask)
                 },
                 Setting {
                     item: "hotkeys.tab.next".into(),
@@ -1374,6 +1580,7 @@ mod tests {
         assert_eq!(
             linux,
             vec![
+                Want::Done(Outcome::Unsupported, MAC_ONLY.into()),
                 Want::Done(Outcome::Unsupported, MAC_ONLY.into()),
                 Want::Done(Outcome::Unsupported, MAC_ONLY.into()),
                 Want::Done(
@@ -1606,6 +1813,7 @@ mod tests {
         );
         let state = |pref: Option<bool>, next: &str, prev: &str| State {
             vertical_tabs: Ok(pref.map(Value::Bool)),
+            duplicates: Ok(None),
             extensions: Ok(vec![ext(
                 EXTENSION_ID,
                 "Chromefile",
@@ -1673,7 +1881,9 @@ mod tests {
     #[test]
     fn plans_failures_and_unsupported_settings() {
         let settings = resolve(
-            &file("version: 1\ntabs:\n  layout: horizontal\nhotkeys:\n  tab.next: Command+J\n"),
+            &file(
+                "version: 1\ntabs:\n  layout: horizontal\n  duplicates: ask\nhotkeys:\n  tab.next: Command+J\n",
+            ),
             Platform::Mac,
         );
         let outcomes = |state: State| -> Vec<(Outcome, String)> {
@@ -1689,12 +1899,19 @@ mod tests {
         assert_eq!(
             outcomes(State {
                 vertical_tabs: Ok(None),
+                duplicates: Ok(None),
                 extensions: Ok(vec![ext(OTHER, "Some Extension", &[])])
             }),
             vec![
                 (
                     Outcome::Unsupported,
                     "this Chrome has no vertical_tabs.enabled setting".into()
+                ),
+                (
+                    Outcome::Failed,
+                    "the Chromefile extension did not answer on its apply page (not installed or \
+                     out of date); run chromefile install"
+                        .into()
                 ),
                 (
                     Outcome::Failed,
@@ -1705,12 +1922,19 @@ mod tests {
         assert_eq!(
             outcomes(State {
                 vertical_tabs: Ok(Some(json!(2))),
+                duplicates: Ok(Some("sometimes".into())),
                 extensions: Ok(vec![ext(EXTENSION_ID, "Chromefile", &[(PREV, "⌘K")])])
             }),
             vec![
                 (
                     Outcome::Unsupported,
                     "Chrome's vertical_tabs.enabled is 2, not true or false".into()
+                ),
+                (
+                    Outcome::Failed,
+                    "the Chromefile extension reports duplicates as \"sometimes\", not ask or \
+                     allow (out of date?); run chromefile install"
+                        .into()
                 ),
                 (
                     Outcome::Failed,
@@ -1724,9 +1948,14 @@ mod tests {
         assert_eq!(
             outcomes(State {
                 vertical_tabs: Err(down.clone()),
+                duplicates: Err(down.clone()),
                 extensions: Err(down.clone())
             }),
-            vec![(Outcome::Failed, down.clone()), (Outcome::Failed, down)]
+            vec![
+                (Outcome::Failed, down.clone()),
+                (Outcome::Failed, down.clone()),
+                (Outcome::Failed, down)
+            ]
         );
     }
 
@@ -1754,6 +1983,7 @@ mod tests {
         idle.commands[0].active = false;
         let state = State {
             vertical_tabs: Ok(None),
+            duplicates: Ok(None),
             extensions: Ok(vec![
                 ext(EXTENSION_ID, "Chromefile", &[(NEXT, "⌥J"), (PREV, "⌥K")]),
                 idle,
@@ -1892,12 +2122,13 @@ mod tests {
 
     #[test]
     fn applies_and_reads_back() {
-        let src = "version: 1\ntabs:\n  layout: vertical\nhotkeys:\n  tab.next: Command+J\n  tab.previous: \"\"\n";
+        let src = "version: 1\ntabs:\n  layout: vertical\n  duplicates: ask\nhotkeys:\n  tab.next: Command+J\n  tab.previous: \"\"\n";
         let mut chrome = Fake::new(Some(false), &[(NEXT, "Alt+J"), (PREV, "Command+K")]);
         assert_eq!(
             apply(src, &mut chrome, false),
             vec![
                 "tabs.layout: changed (horizontal -> vertical)",
+                "tabs.duplicates: changed (allow -> ask)",
                 "hotkeys.tab.next: changed (Alt+J -> Command+J)",
                 "hotkeys.tab.previous: changed (Command+K -> no hotkey)",
             ]
@@ -1906,16 +2137,19 @@ mod tests {
             chrome.setters(),
             vec![
                 "setPref true",
+                "setDuplicates ask",
                 "setCommand select-next-tab Command+J",
                 "setCommand select-previous-tab "
             ]
         );
+        assert_eq!(chrome.stored_duplicates.as_deref(), Some("ask"));
         // Idempotent: the second run changes nothing.
         chrome.calls.clear();
         assert_eq!(
             apply(src, &mut chrome, false),
             vec![
                 "tabs.layout: unchanged (vertical)",
+                "tabs.duplicates: unchanged (ask)",
                 "hotkeys.tab.next: unchanged (Command+J)",
                 "hotkeys.tab.previous: unchanged (no hotkey)",
             ]
@@ -1925,19 +2159,133 @@ mod tests {
 
     #[test]
     fn dry_run_changes_nothing() {
-        let src = "version: 1\ntabs:\n  layout: vertical\nhotkeys:\n  tab.next: Ctrl+J\n  tab.previous: Command+K\n";
+        let src = "version: 1\ntabs:\n  layout: vertical\n  duplicates: ask\nhotkeys:\n  tab.next: Ctrl+J\n  tab.previous: Command+K\n";
         let mut chrome = Fake::new(Some(false), &[(NEXT, "Alt+J"), (PREV, "Command+K")]);
         assert_eq!(
             apply(src, &mut chrome, true),
             vec![
                 "tabs.layout: would change (horizontal -> vertical)",
+                "tabs.duplicates: would change (allow -> ask)",
                 "hotkeys.tab.next: would change (Alt+J -> Command+J)",
                 "hotkeys.tab.previous: unchanged (Command+K)",
             ]
         );
         assert!(chrome.setters().is_empty());
         assert_eq!(chrome.pref, Some(Value::Bool(false)));
+        assert_eq!(chrome.stored_duplicates, None);
         assert_eq!(chrome.ours(NEXT), "⌥J");
+    }
+
+    #[test]
+    fn sets_the_extensions_duplicates_setting() {
+        let ask = "version: 1\ntabs:\n  duplicates: ask\n";
+        let allow = "version: 1\ntabs:\n  duplicates: allow\n";
+        // The extension stores nothing until it is set, which reads as allow.
+        let mut chrome = Fake::new(None, &[]);
+        assert_eq!(
+            apply(allow, &mut chrome, false),
+            vec!["tabs.duplicates: unchanged (allow)"]
+        );
+        assert_eq!(check(ask, &mut chrome), 2);
+        assert!(chrome.setters().is_empty());
+        assert_eq!(chrome.stored_duplicates, None);
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec!["tabs.duplicates: changed (allow -> ask)"]
+        );
+        assert_eq!(chrome.setters(), vec!["setDuplicates ask"]);
+        assert_eq!(chrome.stored_duplicates.as_deref(), Some("ask"));
+        // Idempotent: the second run reads ask and sets nothing.
+        chrome.calls.clear();
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec!["tabs.duplicates: unchanged (ask)"]
+        );
+        assert_eq!(check(ask, &mut chrome), 0);
+        assert!(chrome.setters().is_empty());
+        // allow turns the prompt off again.
+        assert_eq!(
+            apply(allow, &mut chrome, false),
+            vec!["tabs.duplicates: changed (ask -> allow)"]
+        );
+        assert_eq!(chrome.stored_duplicates.as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn fails_duplicates_the_extension_does_not_take() {
+        let ask = "version: 1\ntabs:\n  duplicates: ask\n";
+        // No extension, or one built before apply.html.
+        let mut chrome = Fake::new(None, &[]);
+        chrome.apply_page = false;
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec![
+                "tabs.duplicates: failed (the Chromefile extension did not answer on its apply \
+                 page (not installed or out of date); run chromefile install)"
+            ]
+        );
+        assert!(chrome.setters().is_empty());
+        assert_eq!(check(ask, &mut chrome), 1);
+        // The page refuses the write.
+        let mut chrome = Fake::new(None, &[]);
+        chrome.refuse_duplicates = Some("QUOTA_BYTES quota exceeded".into());
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec!["tabs.duplicates: failed (QUOTA_BYTES quota exceeded)"]
+        );
+        assert_eq!(chrome.stored_duplicates, None);
+        // The write is lost on the way, which only the read back shows.
+        let mut chrome = Fake::new(None, &[]);
+        chrome.accept_duplicates = false;
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec!["tabs.duplicates: failed (set ask but the Chromefile extension reports allow)"]
+        );
+        assert_eq!(
+            chrome.calls,
+            vec!["getDuplicates", "setDuplicates ask", "getDuplicates"]
+        );
+        // A value that is neither ask nor allow is not overwritten blindly.
+        chrome.stored_duplicates = Some("sometimes".into());
+        chrome.calls.clear();
+        assert_eq!(
+            apply(ask, &mut chrome, false),
+            vec![
+                "tabs.duplicates: failed (the Chromefile extension reports duplicates as \
+                 \"sometimes\", not ask or allow (out of date?); run chromefile install)"
+            ]
+        );
+        assert!(chrome.setters().is_empty());
+        // Chrome out of reach.
+        assert_eq!(check(ask, &mut NotRunning), 1);
+    }
+
+    #[test]
+    fn reads_the_apply_pages_replies() {
+        assert_eq!(relay_reply(&json!({ "missing": true })).unwrap(), None);
+        assert_eq!(
+            relay_reply(&json!({ "id": "cf1-a", "ok": true, "value": "ask" })).unwrap(),
+            Some("ask".into())
+        );
+        assert_eq!(
+            relay_reply(&json!({ "id": "cf1-a", "ok": false, "error": "unknown key" }))
+                .unwrap_err()
+                .to_string(),
+            "the Chromefile extension refused: unknown key"
+        );
+        for odd in [
+            json!(null),
+            json!("ask"),
+            json!({ "ok": true }),
+            json!({ "ok": true, "value": 1 }),
+            json!({ "ok": false }),
+            json!({ "missing": false }),
+        ] {
+            assert_eq!(
+                relay_reply(&odd).unwrap_err().to_string(),
+                format!("the Chromefile extension's apply page answered {odd}")
+            );
+        }
     }
 
     #[test]
@@ -1981,6 +2329,14 @@ mod tests {
 
         fn vertical_tabs_now(&mut self) -> Result<Value> {
             unreachable!("a dry run reads nothing back")
+        }
+
+        fn duplicates(&mut self) -> Result<Option<String>> {
+            bail!("Google Chrome is not running; start it first")
+        }
+
+        fn set_duplicates(&mut self, _: &str) -> Result<()> {
+            unreachable!("a dry run sets nothing")
         }
 
         fn extensions(&mut self) -> Result<Vec<ChromeExtension>> {
@@ -2080,6 +2436,13 @@ mod tests {
             false,
         );
         assert_eq!(chrome.calls, vec!["getExtensionsInfo"]);
+        chrome.calls.clear();
+        apply(
+            "version: 1\ntabs:\n  duplicates: allow\n",
+            &mut chrome,
+            false,
+        );
+        assert_eq!(chrome.calls, vec!["getDuplicates"]);
     }
 
     #[test]

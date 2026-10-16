@@ -56,6 +56,26 @@ OPTIONAL. One of:
 
 Which side a vertical tab strip is placed on (left or right) is out of scope for version 1. A future version may add a key such as `tabs.side`.
 
+### 5.2 `tabs.duplicates`
+
+OPTIONAL. What happens when a new tab loads a page that another tab already shows. One of:
+
+| Value   | Meaning |
+|---------|---------|
+| `ask`   | When a new tab loads a page that another tab in the same browser profile already shows, in any window, the browser shows a small prompt in the new tab offering to close the older tab or tabs. |
+| `allow` | Nothing special happens: the browser's default behaviour. |
+
+Leaving the key out leaves the behaviour as it is (section 7); `allow` turns the prompt off.
+
+Rules for `ask`:
+
+1. Two tabs show the same page when their URLs are equal after removing the fragment (the `#` and everything after it). The rest of the URL, including scheme, host, path and query, is compared exactly.
+2. A tab MUST NOT be closed without the user's confirmation.
+3. Pinned tabs are never offered for closing. If every other tab showing the page is pinned, there is no prompt.
+4. The prompt is offered at most once per new tab, when it loads its first page. The browser's new tab page and `about:blank` do not count as a page.
+5. Tabs restored when the browser starts (session restore) are not new tabs.
+6. A tool that cannot show such a prompt in a given browser MUST report the setting as `unsupported` (section 7).
+
 ## 6. `hotkeys`
 
 OPTIONAL mapping. Each key is an action name from the action registry (section 6.1). Each value is a hotkey: either a key combination (section 6.2) or a platform mapping (section 6.3).
@@ -163,6 +183,7 @@ A **conforming tool**:
 Because tools reject unknown keys, any new key, value or action would break existing tools. The policy is therefore:
 
 - **Every change to the set of valid files publishes a new integer `version`**, including purely additive ones (a new section, a new enum value, a new registry action). There are no minor revisions within a version.
+- The exception is a draft: until version 1 is marked final (see the status line), it may still gain settings, as it gained `tabs.duplicates`, without a new `version`. A tool built before such an addition rejects files that use it, as an unknown key, so they fail safely.
 - Each version is a superset of the previous one unless its changelog states otherwise. A file valid under version N SHOULD remain valid, with the same meaning, when its `version` is raised to N+1.
 - Tools declare the versions they support. A tool supporting version N SHOULD also support all earlier versions.
 - The published schema accepts every released version, selecting the rules by the value of `version`.
@@ -192,6 +213,7 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
+  duplicates: ask           # ask | allow
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around

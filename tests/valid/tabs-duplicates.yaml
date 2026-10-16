@@ -1,0 +1,4 @@
+version: 1
+tabs:
+  layout: vertical
+  duplicates: ask

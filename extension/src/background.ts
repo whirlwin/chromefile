@@ -11,6 +11,7 @@ import { appendLog } from "./commandLog";
 import type { LogEntry } from "./commandLog";
 import { detachAll, initDebugger } from "./debugger";
 import { dispatch } from "./dispatcher";
+import { initDuplicates } from "./duplicates";
 import { isEnabled } from "./enabled";
 import { handlers } from "./methods/index";
 import { initShortcuts } from "./shortcuts";
@@ -216,7 +217,9 @@ async function setStatus(status: Status): Promise<void> {
 // Listeners are registered synchronously at top level so their events can wake
 // a suspended worker.
 initDebugger();
+// Local conveniences: they ignore the kill switch.
 initShortcuts();
+initDuplicates();
 // Absent on Chrome without user script messaging; registered on its own so a
 // failure here cannot cost the listeners below.
 chrome.runtime.onUserScriptMessage?.addListener((message, sender, sendResponse) => {

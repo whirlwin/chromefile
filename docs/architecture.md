@@ -165,6 +165,78 @@ Reconnects back off with a `setTimeout`, backed by a `chrome.alarms` alarm
 (hence the `alarms` permission) because an idle MV3 worker can be suspended and
 lose its timers.
 
+The keyboard shortcuts and the duplicate tab prompt below are local
+conveniences, not bridge features: they keep working while the kill switch is
+off.
+
+## Duplicate tab prompt
+
+With `tabs.duplicates: ask` (`duplicates` in `chrome.storage.local`, set by
+`chromefile apply`; missing means `allow`), a new tab that loads a page another
+tab already shows offers to close the older tabs. The same page means the same
+`http(s)` URL without its fragment, in a tab with the same incognito state.
+Pinned tabs are never offered.
+
+- **Which tabs are new:** the worker may be suspended between a tab's creation
+  and its load, so `tabs.onCreated` records `newTab:<id>` (the creation time)
+  in `storage.session`, one key per tab, so concurrent events never overwrite
+  each other. `runtime.onStartup` records `startedAt`; tabs created within 10 s
+  of it are session restore and are not new (checked again at load, since the
+  two events may arrive in either order). `tabs.onRemoved` drops the keys.
+- **When it asks:** on `tabs.onUpdated` with status `complete`, a new tab still
+  on the new tab page or `about:blank` keeps waiting. Otherwise its record is
+  removed, so only its first page counts, and if the setting is still `ask` and
+  other tabs show the page, the worker injects the prompt into the tab's
+  isolated world with `chrome.scripting.executeScript`. Tabs Claude opens with
+  `tabs.open` are marked `bridgeTab:<id>` and never get the prompt; the mark is
+  checked at load time because `onCreated` may fire before `tabs.create`
+  resolves.
+- **The prompt:** a card in a closed shadow root, built without `innerHTML` and
+  styled through the CSSOM so a strict page CSP cannot block it. It never takes
+  focus and hides itself 15 s after the tab is first shown (a tab opened in the
+  background waits until it is switched to) unless the pointer is on it. Its buttons
+  act only on trusted clicks (`event.isTrusted`), so page scripts cannot press
+  them.
+- **Closing:** the button sends `{ type: "duplicates.closeOlder" }` with
+  `chrome.runtime.sendMessage`. The worker answers only when the sender is this
+  extension (`sender.id`), in a tab's top frame (`frameId` 0), and the setting
+  is still `ask`. It then reads the sender tab afresh, works out its duplicates
+  again at click time and closes exactly those, replying `{ closed: n }`.
+  Nothing the page says is used.
+
+## Apply relay page
+
+`chromefile apply` writes extension settings through `apply.html`. It opens
+`chrome-extension://<id>/apply.html?chromefile=<marker>` in a background tab
+and runs JavaScript in it with AppleScript. That script shares the page's DOM
+but has no `chrome.*` APIs, so it talks to the page's own script (`apply.js`)
+through DOM events whose `detail` is a JSON string (objects do not cross
+worlds):
+
+```js
+document.dispatchEvent(new CustomEvent("chromefile:request", {
+  detail: JSON.stringify({ id: "1", method: "set", key: "duplicates", value: "ask" }),
+}));
+// answered with a "chromefile:reply" event, detail:
+// {"id":"1","ok":true,"value":"ask"} or {"id":"1","ok":false,"error":"..."}
+```
+
+- `apply.js` adds its listener first and then sets
+  `document.documentElement.dataset.chromefileApply = "1"`; the CLI treats a
+  page without that marker as a missing or outdated extension.
+- `method` is `get` or `set`. `key` must be in a small allow-list (today only
+  `duplicates`, with values `ask` and `allow`); anything else gets
+  `ok: false` with an error naming the problem. `value` in a reply is what is
+  stored after the operation, read back from storage, with a missing value
+  reported as `allow`.
+- A request without a usable `id` (non-empty string, at most 100 characters)
+  or whose `detail` is not a JSON object string is ignored: there is nobody to
+  answer.
+- Who can send requests: only code running in the extension page's DOM (the
+  extension itself, DevTools, AppleScript with "Allow JavaScript from Apple
+  Events"). The page is not in `web_accessible_resources`, so web pages cannot
+  open or frame it.
+
 ## Extension-initiated requests (mods to Claude Code)
 
 A mod running in the `USER_SCRIPT` world can ask the bridge to open a new

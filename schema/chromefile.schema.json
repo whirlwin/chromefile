@@ -19,6 +19,10 @@
         "layout": {
           "description": "Where the tab strip is shown. vertical: along the side of the window. horizontal: across the top of the window.",
           "enum": ["vertical", "horizontal"]
+        },
+        "duplicates": {
+          "description": "What happens when a new tab loads a page another tab in the same profile already shows. ask: the new tab offers to close the older tab or tabs, never closing one without confirmation; URLs are compared without the fragment and pinned tabs are never offered. allow: nothing special happens.",
+          "enum": ["ask", "allow"]
         }
       }
     },

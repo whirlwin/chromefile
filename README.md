@@ -2,7 +2,7 @@
 
 # Chromefile
 
-A Chromefile is a small YAML file that declares how Google Chrome (and Chromium-based browsers) should be set up: tab layout, hotkeys, and more over time. Like a Brewfile, you keep it in your dotfiles and any tool that implements this open, tool-neutral specification can apply it. It describes the result you want, not browser internals, so the same file stays readable and portable across machines, platforms and tools.
+A Chromefile is a small YAML file that declares how Google Chrome (and Chromium-based browsers) should be set up: tab layout, duplicate tabs, hotkeys, and more over time. Like a Brewfile, you keep it in your dotfiles and any tool that implements this open, tool-neutral specification can apply it. It describes the result you want, not browser internals, so the same file stays readable and portable across machines, platforms and tools.
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/whirlwin/chromefile/main/schema/chromefile.schema.json
@@ -10,6 +10,7 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
+  duplicates: ask           # ask | allow
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around
@@ -121,6 +122,17 @@ The toolbar badge shows `ON` while the extension is connected to the host, `...`
 They work everywhere, including the new tab page, and keep working while the kill switch is off.
 
 The bindings in the manifest are only defaults that Chrome applies on first install. The source of truth is the `hotkeys` section of the [`Chromefile`](Chromefile): change them there and run `chromefile apply` (see [cli/README.md](cli/README.md#apply)). Rebinding them by hand at `chrome://extensions/shortcuts` works too, but the next apply puts the Chromefile values back, and `chromefile apply --check` reports the difference.
+
+### Duplicate tabs
+
+With `tabs.duplicates: ask`, a new tab that loads a page another tab already shows (in any window of the same profile; incognito tabs only match each other) gets a small card in its top right corner. Under a muted Chromefile label it says "Already open in 1 other tab" (or "Already open in N other tabs") and offers **Keep** and **Close older tab** (**Close older tabs** when there are several). Nothing closes unless you click. The card never takes focus, and it hides itself 15 seconds after you first see the tab (a tab opened in the background waits until you switch to it) unless the pointer is on it. Page scripts can't press its buttons: only real clicks count.
+
+- Two tabs show the same page when their URLs match, ignoring the `#fragment`.
+- Pinned tabs are never offered for closing.
+- Only the first page a new tab loads counts; the new tab page and `about:blank` don't. Tabs restored when Chrome starts are not new, and tabs opened through the bridge (`tabs_open`) never get the card.
+- Only `http` and `https` pages can show it. Chrome lets no extension into `chrome://` pages, the Chrome Web Store and the like.
+
+The source of truth is the `tabs` section of the [`Chromefile`](Chromefile): set `duplicates` to `ask` or `allow` there and run `chromefile apply` (see [cli/README.md](cli/README.md#apply)); `chromefile apply --check` reports when Chrome differs. `allow` turns the card off, and is also how the extension behaves until it is told otherwise. Removing the line does not turn it off: apply then leaves the setting as it is. Like the keyboard shortcuts, it keeps working while the kill switch is off. See [docs/architecture.md](docs/architecture.md#duplicate-tab-prompt) for how it works.
 
 ### Outlook: Ask Claude button
 
@@ -247,7 +259,7 @@ Be clear about what this is: a remote control for every site you are logged in t
 
 - **The trust boundary is your macOS user.** The socket is mode `0600` in a `0700` directory, so other users cannot reach it, but any process running as you can connect and drive your browser with your sessions. There is no extra secret on top of that.
 - **Native messaging is restricted to this extension.** The host manifest only allows `chrome-extension://cbapdndkoijjfggigdfalnjgjopdebid/`, the ID fixed by the manifest `key` (see `extension/extension-id.txt`).
-- **Activity is only partly visible.** The badge shows that the extension is connected, not what it is doing. The debugger bar appears only for the CDP tools (`page_eval`, `page_cdp`, `page_screenshot`, `page_text`). Tab, CSS, mod, network rule and `chrome_call` operations (for example reading cookies or history) show nothing beyond the `ON` badge and the popup's command log. The kill switch cuts everything.
+- **Activity is only partly visible.** The badge shows that the extension is connected, not what it is doing. The debugger bar appears only for the CDP tools (`page_eval`, `page_cdp`, `page_screenshot`, `page_text`). Tab, CSS, mod, network rule and `chrome_call` operations (for example reading cookies or history) show nothing beyond the `ON` badge and the popup's command log. The kill switch cuts the bridge entirely; only the local [keyboard shortcuts](#keyboard-shortcuts) and [duplicate tab card](#duplicate-tabs) keep working.
 - **Page content is untrusted input.** Text, screenshots and eval results flow back to Claude and can carry prompt injection. Be deliberate about which pages you let Claude read, especially in a session where it also has other tools (shell, email, file access) it could be talked into using.
 
 ### Uninstall

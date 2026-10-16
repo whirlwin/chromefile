@@ -1,3 +1,4 @@
+import { markBridgeTab } from "../duplicates";
 import type { HandlerMap } from "../protocol";
 import { numList, optBool, oneOf, optStr, str } from "../params";
 import { resolveTabId } from "../target";
@@ -23,6 +24,7 @@ export const tabsMethods: HandlerMap = {
 
   "tabs.open": async (params) => {
     const tab = await chrome.tabs.create({ url: str(params, "url"), active: optBool(params, "active") ?? true });
+    if (tab.id !== undefined) await markBridgeTab(tab.id);
     return { tab: summarize(tab) };
   },
 

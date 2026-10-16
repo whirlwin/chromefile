@@ -158,6 +158,33 @@ scripts/vendor.sh [--no-build]
 
 It runs `npm run build` (skipped with `--no-build`) and replaces both copies. CI fails when they are stale.
 
+## Releasing
+
+Bump `version` in `Cargo.toml`, run `cargo check` so `Cargo.lock` follows (the release builds with `--locked`, so a stale lockfile fails it), commit both, then tag that commit and push the tag:
+
+```sh
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The tag starts [`release.yml`](../.github/workflows/release.yml), which:
+
+1. refuses a tag that does not match the crate version (`vX.Y.Z` for version `X.Y.Z`);
+2. runs the tests;
+3. builds `aarch64-apple-darwin` and `x86_64-apple-darwin` (cross compiled on the arm64 runner; the embedded extension and host are the committed copies, so Rust is all it needs);
+4. packs each into `chromefile-vX.Y.Z-<target>.tar.gz`, with `chromefile` at the archive root next to `LICENSE` and `README.md`, and lists their SHA-256 sums in `SHA256SUMS`;
+5. attests the build provenance of both archives;
+6. creates the GitHub release `vX.Y.Z` with generated notes and the archives and `SHA256SUMS` attached.
+
+To check a downloaded archive (`--ignore-missing` skips the archive you did not download):
+
+```sh
+gh attestation verify chromefile-vX.Y.Z-aarch64-apple-darwin.tar.gz --repo whirlwin/chromefile
+shasum -a 256 -c --ignore-missing SHA256SUMS
+```
+
+Running the workflow by hand (`gh workflow run release.yml`) tests and builds the same way, then uploads the archives and `SHA256SUMS` as the run's `chromefile-dist` artifact. It attests and releases nothing, also when started on a tag, so use it to try a change to the workflow.
+
 ## Testing
 
 These environment variables exist for tests only:

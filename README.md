@@ -54,7 +54,16 @@ When the extension connects through native messaging, Chrome starts the `chromef
 
 ### Install
 
-Requires macOS, Node 24 or newer (the host runs on it), a Rust toolchain to build, and Google Chrome 135 or newer. Native host manifests are written for every installed Chromium browser (Chrome, Brave, Edge, Vivaldi, Arc, Chromium), but `chromefile install` loads the extension into Google Chrome only.
+Requires macOS, Node 24 or newer (the host runs on it, also from a release binary) and Google Chrome 135 or newer; a Rust toolchain is needed only to build from source. Native host manifests are written for every installed Chromium browser (Chrome, Brave, Edge, Vivaldi, Arc, Chromium), but `chromefile install` loads the extension into Google Chrome only.
+
+With [mise](https://mise.jdx.dev), from a release:
+
+```sh
+mise use -g github:whirlwin/chromefile
+chromefile install
+```
+
+The [releases page](https://github.com/whirlwin/chromefile/releases) has the binaries for macOS on arm64 and x86_64, with build provenance attestations (see [cli/README.md](cli/README.md#releasing)). `chromefile install` records the binary's exact path, and mise keeps each version in a folder of its own, so run `chromefile install` again after every upgrade; until you do, `chromefile status` reports the native host manifests and the MCP server as `differs` and exits 1.
 
 From a clone:
 
@@ -64,7 +73,7 @@ cd chromefile
 scripts/install.sh
 ```
 
-`scripts/install.sh` builds the extension and host (`npm ci` the first time, `npm run build`), copies the builds into the crate (`scripts/vendor.sh`), runs `cargo install --path cli --locked` and then `chromefile install`. Without a clone:
+`scripts/install.sh` builds the extension and host (`npm ci` the first time, `npm run build`), copies the builds into the crate (`scripts/vendor.sh`), runs `cargo install --path cli --locked` and then `chromefile install`. To build without a clone:
 
 ```sh
 cargo install --git https://github.com/whirlwin/chromefile chromefile
@@ -275,8 +284,9 @@ Be clear about what this is: a remote control for every site you are logged in t
 ### Uninstall
 
 ```sh
-chromefile uninstall     # or scripts/uninstall.sh from a clone
-cargo uninstall chromefile
+chromefile uninstall                       # or scripts/uninstall.sh from a clone
+cargo uninstall chromefile                 # if you installed it with cargo
+mise unuse -g github:whirlwin/chromefile   # if you installed it with mise
 ```
 
 `chromefile uninstall` removes the extension from Chrome (which also deletes its registered mods and storage), its folder, the native host manifests, the MCP registration and the extracted host. It keeps `config.json` and `sessions/` in `~/Library/Application Support/chromefile` and says so.

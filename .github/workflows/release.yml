@@ -1,0 +1,100 @@
+name: release
+
+# A pushed v* tag builds, attests and publishes a release. A run started by
+# hand builds the same archives and keeps them with the run, to try a change
+# to this file without publishing anything. The publishing steps check the
+# event rather than the ref, so a manual run on a tag still publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write      # create the release and upload its assets
+      id-token: write      # sign the provenance attestations with the run's OIDC identity
+      attestations: write  # store the attestations with the repository
+    defaults:
+      run:
+        # GitHub's default on macOS is bash -e without pipefail.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cargo.lock needs a recent toolchain; the runner's preinstalled one can lag.
+      # The runner is arm64, so x86_64 is cross compiled: the crate is pure Rust
+      # and the system SDK links both architectures.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # The tag names the release and the crate version is what --version prints,
+      # so a mismatch would publish binaries that disagree with their release.
+      - name: Version
+        working-directory: cli
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "chromefile") | .version')"
+          if [ -z "$version" ]; then
+            echo "::error::could not read the chromefile version from cli/Cargo.toml"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in cli/Cargo.toml; tag v$version or bump the version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # CI runs the tests on Linux only; this is their one run on macOS.
+      - name: Test
+        working-directory: cli
+        run: cargo test --locked
+
+      # The binary embeds the committed cli/extension and cli/host (CI checks
+      # they are fresh), so the build needs Rust only, no Node.
+      - name: Build and package
+        run: |
+          mkdir -p dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --manifest-path cli/Cargo.toml --target "$target"
+            name="chromefile-v$VERSION-$target"
+            stage="$RUNNER_TEMP/$name"
+            mkdir -p "$stage"
+            cp "cli/target/$target/release/chromefile" LICENSE README.md "$stage/"
+            # Naming the entries puts them at the archive root without a ./
+            # prefix. bsdtar archives extended attributes by default (macOS
+            # tags new files with com.apple.provenance); --no-xattrs leaves them
+            # behind.
+            tar --no-xattrs -czf "dist/$name.tar.gz" -C "$stage" chromefile LICENSE README.md
+          done
+          cd dist
+          shasum -a 256 -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # Provenance says which workflow run and commit built each archive, signed
+      # with the run's identity, so a download can be checked with
+      # gh attestation verify; mise checks it when installing a release.
+      - name: Attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+      # Not attested: an attestation should only ever vouch for a released archive.
+      - name: Upload archives
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromefile-dist
+          path: dist/

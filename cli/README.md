@@ -176,6 +176,8 @@ The tag starts [`release.yml`](../.github/workflows/release.yml), which:
 5. attests the build provenance of both archives;
 6. creates the GitHub release `vX.Y.Z` with generated notes and the archives and `SHA256SUMS` attached.
 
+mise users get a new release 24 hours after it is published: mise holds back versions younger than its `minimum_release_age` setting (24h by default) to limit supply-chain risk, so until then `mise use github:whirlwin/chromefile` installs the previous release, or, for the very first one, finds no version. `mise use --minimum-release-age 0s github:whirlwin/chromefile` takes it at once.
+
 To check a downloaded archive (`--ignore-missing` skips the archive you did not download):
 
 ```sh

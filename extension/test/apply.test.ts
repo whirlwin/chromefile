@@ -13,7 +13,18 @@ describe("parseRequest", () => {
       key: "duplicates",
       value: "ask",
     });
-    expect(request({ id: "3", method: "set", key: "duplicates", value: "allow" })).toMatchObject({ ok: true, value: "allow" });
+    for (const value of ["none", "auto-close-duplicates"]) {
+      expect(request({ id: "3", method: "set", key: "duplicates", value })).toMatchObject({ ok: true, value });
+    }
+  });
+
+  it("reads back what is stored, with anything else as none", () => {
+    const reply = request({ id: "1", method: "get", key: "duplicates" });
+    const read = reply && reply.ok ? reply.setting.read : () => "unreachable";
+    expect(read("auto-close-duplicates")).toBe("auto-close-duplicates");
+    expect(read("ask")).toBe("ask");
+    expect(read("allow")).toBe("none");
+    expect(read(undefined)).toBe("none");
   });
 
   it("ignores requests nobody could be answered for", () => {
@@ -55,18 +66,28 @@ describe("parseRequest", () => {
     expect(request({ id: "1", method: "set", key: "duplicates", value: "on" })).toEqual({
       ok: false,
       id: "1",
-      error: 'unknown duplicates value "on" (allowed: ask, allow)',
+      error: 'unknown duplicates value "on" (allowed: none, ask, auto-close-duplicates)',
+    });
+    // What an earlier version stored is read, but no longer written.
+    expect(request({ id: "1", method: "set", key: "duplicates", value: "allow" })).toEqual({
+      ok: false,
+      id: "1",
+      error: 'unknown duplicates value "allow" (allowed: none, ask, auto-close-duplicates)',
     });
     expect(request({ id: "1", method: "set", key: "duplicates" })).toMatchObject({
       ok: false,
-      error: "missing duplicates value (allowed: ask, allow)",
+      error: "missing duplicates value (allowed: none, ask, auto-close-duplicates)",
     });
     expect(request({ id: "1", method: "set", key: "duplicates", value: true })).toMatchObject({ ok: false });
   });
 
   it("cuts long values short in errors", () => {
     const reply = request({ id: "1", method: "set", key: "duplicates", value: "v".repeat(1_000) });
-    expect(reply).toMatchObject({ ok: false });
-    expect(reply && !reply.ok ? reply.error.length : 0).toBeLessThan(120);
+    // The JSON quote and 59 characters, then "...".
+    expect(reply).toEqual({
+      ok: false,
+      id: "1",
+      error: `unknown duplicates value "${"v".repeat(59)}... (allowed: none, ask, auto-close-duplicates)`,
+    });
   });
 });

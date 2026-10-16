@@ -1,7 +1,7 @@
 // src/constants.ts
 var DUPLICATES_KEY = "duplicates";
-function duplicatesSetting(stored) {
-  return stored === "ask" ? "ask" : "allow";
+function duplicateAction(stored) {
+  return stored === "ask" || stored === "auto-close-duplicates" ? stored : "none";
 }
 
 // src/applyRequest.ts
@@ -9,7 +9,7 @@ var MAX_ID = 100;
 var METHODS = ["get", "set"];
 var MAX_SHOWN = 60;
 var SETTINGS = {
-  [DUPLICATES_KEY]: { values: ["ask", "allow"], read: duplicatesSetting }
+  [DUPLICATES_KEY]: { values: ["none", "ask", "auto-close-duplicates"], read: duplicateAction }
 };
 function parseRequest(detail) {
   if (typeof detail !== "string") return null;

@@ -10,7 +10,8 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
-  duplicates: ask           # ask | allow
+  duplicate:
+    action: ask             # none | ask | auto-close-duplicates
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around
@@ -125,14 +126,22 @@ The bindings in the manifest are only defaults that Chrome applies on first inst
 
 ### Duplicate tabs
 
-With `tabs.duplicates: ask`, a new tab that loads a page another tab already shows (in any window of the same profile; incognito tabs only match each other) gets a small card in its top right corner. Under a muted Chromefile label it says "Already open in 1 other tab" (or "Already open in N other tabs") and offers **Keep** and **Close older tab** (**Close older tabs** when there are several). Nothing closes unless you click. The card never takes focus, and it hides itself 15 seconds after you first see the tab (a tab opened in the background waits until you switch to it) unless the pointer is on it. Page scripts can't press its buttons: only real clicks count.
+`tabs.duplicate.action` says what happens when a new tab loads a page another tab already shows (in any window of the same profile; incognito tabs only match each other):
 
-- Two tabs show the same page when their URLs match, ignoring the `#fragment`.
-- Pinned tabs are never offered for closing.
-- Only the first page a new tab loads counts; the new tab page and `about:blank` don't. Tabs restored when Chrome starts are not new, and tabs opened through the bridge (`tabs_open`) never get the card.
-- Only `http` and `https` pages can show it. Chrome lets no extension into `chrome://` pages, the Chrome Web Store and the like.
+- `none`: nothing.
+- `ask`: the new tab offers to close the older tabs.
+- `auto-close-duplicates`: the older tabs close without asking, so the new tab is the only one showing the page.
 
-The source of truth is the `tabs` section of the [`Chromefile`](Chromefile): set `duplicates` to `ask` or `allow` there and run `chromefile apply` (see [cli/README.md](cli/README.md#apply)); `chromefile apply --check` reports when Chrome differs. `allow` turns the card off, and is also how the extension behaves until it is told otherwise. Removing the line does not turn it off: apply then leaves the setting as it is. Like the keyboard shortcuts, it keeps working while the kill switch is off. See [docs/architecture.md](docs/architecture.md#duplicate-tab-prompt) for how it works.
+With `ask`, the new tab gets a small card in its top right corner. Under a muted Chromefile label it says "Already open in 1 other tab" (or "Already open in N other tabs") and offers **Keep** and **Close older tab** (**Close older tabs** when there are several). Nothing closes unless you click. The card never takes focus, and it hides itself 15 seconds after you first see the tab (a tab opened in the background waits until you switch to it) unless the pointer is on it. Page scripts can't press its buttons: only real clicks count.
+
+With `auto-close-duplicates`, the older tabs close as soon as the new tab loads, and the new tab shows the same card saying "Closed 1 older tab" (or "Closed N older tabs") with **OK** and **Undo**. Undo reopens the closed tabs with their history (from Chrome's recently closed tabs, hence the extension's `sessions` permission), and the tabs it brings back don't close anything in turn. The tab a window is showing is never closed this way, so Command+clicking a link to the page you are reading can't close it under you; if every older copy is pinned or shown in its window, nothing closes. Command+Shift+T on an auto-closed tab reopens it as a new tab like any other, so it closes the newer copy in turn, with an Undo of its own.
+
+- Two tabs show the same page when their URLs match, ignoring the `#fragment`. Only `http` and `https` pages count.
+- Pinned tabs are never offered for closing, and never closed.
+- Only the first page a new tab loads counts; the new tab page and `about:blank` don't. Tabs restored when Chrome starts are not new, and tabs opened through the bridge (`tabs_open`) are left alone.
+- On a page Chrome lets no extension script (the Chrome Web Store, for one), no card can appear: `ask` does nothing there, and `auto-close-duplicates` still closes the older tabs, just without the card; Command+Shift+T reopens them.
+
+The source of truth is `tabs.duplicate.action` in the [`Chromefile`](Chromefile): set it to `none`, `ask` or `auto-close-duplicates` there and run `chromefile apply` (see [cli/README.md](cli/README.md#apply)); `chromefile apply --check` reports when Chrome differs. `none` turns both off, and is also how the extension behaves until it is told otherwise (the `allow` an earlier version stored reads as `none` too). Removing the key does not turn it off: apply then leaves the setting as it is. Like the keyboard shortcuts, it keeps working while the kill switch is off. See [docs/architecture.md](docs/architecture.md#duplicate-tabs) for how it works.
 
 ### Outlook: Ask Claude button
 
@@ -259,7 +268,7 @@ Be clear about what this is: a remote control for every site you are logged in t
 
 - **The trust boundary is your macOS user.** The socket is mode `0600` in a `0700` directory, so other users cannot reach it, but any process running as you can connect and drive your browser with your sessions. There is no extra secret on top of that.
 - **Native messaging is restricted to this extension.** The host manifest only allows `chrome-extension://cbapdndkoijjfggigdfalnjgjopdebid/`, the ID fixed by the manifest `key` (see `extension/extension-id.txt`).
-- **Activity is only partly visible.** The badge shows that the extension is connected, not what it is doing. The debugger bar appears only for the CDP tools (`page_eval`, `page_cdp`, `page_screenshot`, `page_text`). Tab, CSS, mod, network rule and `chrome_call` operations (for example reading cookies or history) show nothing beyond the `ON` badge and the popup's command log. The kill switch cuts the bridge entirely; only the local [keyboard shortcuts](#keyboard-shortcuts) and [duplicate tab card](#duplicate-tabs) keep working.
+- **Activity is only partly visible.** The badge shows that the extension is connected, not what it is doing. The debugger bar appears only for the CDP tools (`page_eval`, `page_cdp`, `page_screenshot`, `page_text`). Tab, CSS, mod, network rule and `chrome_call` operations (for example reading cookies or history) show nothing beyond the `ON` badge and the popup's command log. The kill switch cuts the bridge entirely; only the local [keyboard shortcuts](#keyboard-shortcuts) and [duplicate tab handling](#duplicate-tabs) keep working.
 - **Page content is untrusted input.** Text, screenshots and eval results flow back to Claude and can carry prompt injection. Be deliberate about which pages you let Claude read, especially in a session where it also has other tools (shell, email, file access) it could be talked into using.
 
 ### Uninstall

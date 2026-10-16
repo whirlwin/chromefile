@@ -56,25 +56,36 @@ OPTIONAL. One of:
 
 Which side a vertical tab strip is placed on (left or right) is out of scope for version 1. A future version may add a key such as `tabs.side`.
 
-### 5.2 `tabs.duplicates`
+### 5.2 `tabs.duplicate`
 
-OPTIONAL. What happens when a new tab loads a page that another tab already shows. One of:
+OPTIONAL mapping. What happens when a new tab loads a page that another tab in the same browser profile already shows, in any window. Its only key is `action`, which is the setting; an empty mapping sets nothing.
 
-| Value   | Meaning |
-|---------|---------|
-| `ask`   | When a new tab loads a page that another tab in the same browser profile already shows, in any window, the browser shows a small prompt in the new tab offering to close the older tab or tabs. |
-| `allow` | Nothing special happens: the browser's default behaviour. |
+#### `tabs.duplicate.action`
 
-Leaving the key out leaves the behaviour as it is (section 7); `allow` turns the prompt off.
+OPTIONAL. One of:
 
-Rules for `ask`:
+| Value                   | Meaning |
+|-------------------------|---------|
+| `none`                  | Nothing special happens: the browser's default behaviour. |
+| `ask`                   | The browser shows a small prompt in the new tab offering to close the older tab or tabs. |
+| `auto-close-duplicates` | The browser closes the older tab or tabs without asking, so the new tab is the only one showing the page. |
+
+Leaving the key out leaves the behaviour as it is (section 7); `none` turns `ask` and `auto-close-duplicates` off.
+
+Rules for `ask` and `auto-close-duplicates`:
 
 1. Two tabs show the same page when their URLs are equal after removing the fragment (the `#` and everything after it). The rest of the URL, including scheme, host, path and query, is compared exactly.
-2. A tab MUST NOT be closed without the user's confirmation.
-3. Pinned tabs are never offered for closing. If every other tab showing the page is pinned, there is no prompt.
-4. The prompt is offered at most once per new tab, when it loads its first page. The browser's new tab page and `about:blank` do not count as a page.
-5. Tabs restored when the browser starts (session restore) are not new tabs.
-6. A tool that cannot show such a prompt in a given browser MUST report the setting as `unsupported` (section 7).
+2. Pinned tabs are never offered for closing, and never closed. If every other tab showing the page is pinned, nothing happens.
+3. The action is taken at most once per new tab, when it loads its first page. The browser's new tab page and `about:blank` do not count as a page.
+4. Tabs restored when the browser starts (session restore) are not new tabs.
+5. A tool that cannot carry out the action in a given browser MUST report the setting as `unsupported` (section 7).
+
+With `ask`, a tab MUST NOT be closed without the user's confirmation.
+
+With `auto-close-duplicates`, the older tabs are closed without asking: putting this value in the file is the user's consent. In addition:
+
+1. A tab that is active (the tab shown) in its window is never closed this way, so that opening a link to the page being read in a new tab (with Command+click or Ctrl+click, say) cannot close that page. If every older tab showing the page is pinned or active, nothing is closed.
+2. A tool SHOULD tell the user which tabs it closed, and SHOULD offer a way to undo it (for example a notice with an Undo button that reopens them).
 
 ## 6. `hotkeys`
 
@@ -154,7 +165,7 @@ hotkeys:
 A conforming tool:
 
 1. MUST parse and validate the whole file before changing anything. If the file is invalid, the tool MUST change nothing.
-2. MUST reject unknown keys (at the top level, in `tabs`, in a platform mapping) and unknown action names, with an error naming the path (for example `tabs.side` or `hotkeys.tab.close`). It MUST NOT ignore them. New settings are introduced only through a new `version` (section 9).
+2. MUST reject unknown keys (at the top level, in `tabs`, in `tabs.duplicate`, in a platform mapping) and unknown action names, with an error naming the path (for example `tabs.side` or `hotkeys.tab.close`). It MUST NOT ignore them. New settings are introduced only through a new `version` (section 9).
 3. MUST treat duplicate YAML keys as an error.
 4. MUST apply settings idempotently: applying the same file twice changes nothing the second time.
 5. MUST report the outcome of each setting it processes as one of `changed`, `unchanged`, `failed` or `unsupported`.
@@ -183,7 +194,7 @@ A **conforming tool**:
 Because tools reject unknown keys, any new key, value or action would break existing tools. The policy is therefore:
 
 - **Every change to the set of valid files publishes a new integer `version`**, including purely additive ones (a new section, a new enum value, a new registry action). There are no minor revisions within a version.
-- The exception is a draft: until version 1 is marked final (see the status line), it may still gain settings, as it gained `tabs.duplicates`, without a new `version`. A tool built before such an addition rejects files that use it, as an unknown key, so they fail safely.
+- The exception is a draft: until version 1 is marked final (see the status line), it may still gain settings, as it gained `tabs.duplicate`, without a new `version`. A tool built before such an addition rejects files that use it, as an unknown key, so they fail safely.
 - Each version is a superset of the previous one unless its changelog states otherwise. A file valid under version N SHOULD remain valid, with the same meaning, when its `version` is raised to N+1.
 - Tools declare the versions they support. A tool supporting version N SHOULD also support all earlier versions.
 - The published schema accepts every released version, selecting the rules by the value of `version`.
@@ -192,7 +203,7 @@ Because tools reject unknown keys, any new key, value or action would break exis
 Naming conventions for future additions:
 
 - Top-level sections and setting keys: `lower_snake_case` nouns describing a browser area (for example `tabs`, `new_tab_page`).
-- Enum values: `lower_snake_case`.
+- Enum values: lower-case words joined with hyphens (for example `auto-close-duplicates`).
 - Actions: dotted lower-case names, `noun.verb` or `noun.adjective` (for example `tab.next`, `tab.close`, `window.new`), using `lower_snake_case` within a segment if needed.
 - Names describe user-visible behaviour, never a browser's internal identifiers.
 
@@ -213,7 +224,8 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
-  duplicates: ask           # ask | allow
+  duplicate:
+    action: ask             # none | ask | auto-close-duplicates
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around

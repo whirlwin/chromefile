@@ -52,7 +52,8 @@
     "bookmarks",
     "downloads",
     "storage",
-    "alarms"
+    "alarms",
+    "sessions"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -1,17 +1,19 @@
-// The card a new tab shows when its page is already open in `count` other
-// tabs (see duplicates.ts). chrome.scripting.executeScript serializes this
-// function and runs it in the tab's isolated world, so it must be
-// self-contained: no imports and no references to anything outside its body,
-// whose names esbuild may change.
+// The card a new tab shows when its page is already open (see duplicates.ts).
+// "ask": `count` other tabs show it, and the card offers to close them.
+// "closed": `count` older tabs were just closed, and the card offers Undo.
+// chrome.scripting.executeScript serializes this function and runs it in the
+// tab's isolated world, so it must be self-contained: no imports and no
+// references to anything outside its body, whose names esbuild may change.
 //
 // The page is untrusted. The card lives in a closed shadow root and is built
 // without innerHTML. Styles go through the CSSOM, which a strict page CSP does
 // not block (it can block <style> elements and style attributes). The buttons
 // act only on trusted clicks, so page scripts cannot press them, and nothing
 // takes focus away from the page.
-export function showDuplicatePrompt(count: number): void {
-  // Keep in sync with CLOSE_OLDER in duplicates.ts.
-  const MESSAGE_TYPE = "duplicates.closeOlder";
+export function showDuplicatePrompt(kind: "ask" | "closed", count: number): void {
+  // Keep in sync with CLOSE_OLDER and UNDO in duplicates.ts.
+  const CLOSE_OLDER_TYPE = "duplicates.closeOlder";
+  const UNDO_TYPE = "duplicates.undo";
   const MARKER = "data-chromefile-duplicates";
   const HIDE_MS = 15_000;
 
@@ -56,7 +58,9 @@ export function showDuplicatePrompt(count: number): void {
     "line-height": "1.4",
   });
   const label = make("div", "Chromefile", { "font-size": "11px", color: colors.muted, "margin-bottom": "4px" });
-  const message = make("div", count === 1 ? "Already open in 1 other tab" : `Already open in ${count} other tabs`, {});
+  const asking = kind === "ask";
+  const tabs = count === 1 ? "tab" : "tabs";
+  const message = make("div", asking ? `Already open in ${count} other ${tabs}` : `Closed ${count} older ${tabs}`, {});
   const buttons = make("div", "", { display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "10px" });
   const button = (text: string, primary: boolean) => {
     const node = make("button", text, {
@@ -73,8 +77,8 @@ export function showDuplicatePrompt(count: number): void {
     node.type = "button";
     return node;
   };
-  const closeButton = button(count === 1 ? "Close older tab" : "Close older tabs", true);
-  const keepButton = button("Keep", false);
+  const primaryButton = button(asking ? `Close older ${tabs}` : "Undo", true);
+  const secondaryButton = button(asking ? "Keep" : "OK", false);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const hide = () => {
@@ -86,23 +90,24 @@ export function showDuplicatePrompt(count: number): void {
     timer = setTimeout(hide, HIDE_MS);
   };
 
-  closeButton.addEventListener("click", (event) => {
+  primaryButton.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
     hide();
-    // The worker decides what to close; there is nothing to do if it fails.
+    // The worker decides what to close or restore; there is nothing to do if
+    // it fails.
     try {
-      chrome.runtime.sendMessage({ type: MESSAGE_TYPE }).catch(() => {});
+      chrome.runtime.sendMessage({ type: asking ? CLOSE_OLDER_TYPE : UNDO_TYPE }).catch(() => {});
     } catch {
       // The extension was reloaded or removed since this card was shown.
     }
   });
-  keepButton.addEventListener("click", (event) => {
+  secondaryButton.addEventListener("click", (event) => {
     if (event.isTrusted) hide();
   });
   card.addEventListener("mouseenter", () => clearTimeout(timer));
   card.addEventListener("mouseleave", arm);
 
-  buttons.append(keepButton, closeButton);
+  buttons.append(secondaryButton, primaryButton);
   card.append(label, message, buttons);
   root.append(card);
   document.documentElement.append(host);

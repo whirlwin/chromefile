@@ -165,44 +165,85 @@ Reconnects back off with a `setTimeout`, backed by a `chrome.alarms` alarm
 (hence the `alarms` permission) because an idle MV3 worker can be suspended and
 lose its timers.
 
-The keyboard shortcuts and the duplicate tab prompt below are local
+The keyboard shortcuts and the duplicate tab handling below are local
 conveniences, not bridge features: they keep working while the kill switch is
 off.
 
-## Duplicate tab prompt
+## Duplicate tabs
 
-With `tabs.duplicates: ask` (`duplicates` in `chrome.storage.local`, set by
-`chromefile apply`; missing means `allow`), a new tab that loads a page another
-tab already shows offers to close the older tabs. The same page means the same
-`http(s)` URL without its fragment, in a tab with the same incognito state.
-Pinned tabs are never offered.
+`tabs.duplicate.action` (`duplicates` in `chrome.storage.local`, set by
+`chromefile apply`) says what happens when a new tab loads a page another tab
+already shows:
+
+- `none` (also what a missing value, or the `allow` an earlier version stored,
+  means): nothing.
+- `ask`: the new tab shows a card offering to close the older tabs.
+- `auto-close-duplicates`: the older tabs close at once and the new tab shows
+  a notice offering Undo.
+
+The same page means the same `http(s)` URL without its fragment, in a tab with
+the same incognito state. Pinned tabs are never offered or closed.
 
 - **Which tabs are new:** the worker may be suspended between a tab's creation
-  and its load, so `tabs.onCreated` records `newTab:<id>` (the creation time)
-  in `storage.session`, one key per tab, so concurrent events never overwrite
-  each other. `runtime.onStartup` records `startedAt`; tabs created within 10 s
-  of it are session restore and are not new (checked again at load, since the
-  two events may arrive in either order). `tabs.onRemoved` drops the keys.
-- **When it asks:** on `tabs.onUpdated` with status `complete`, a new tab still
+  and its load, so unless the action is `none`, `tabs.onCreated` records
+  `newTab:<id>` (the creation time) in `storage.session`, one key per tab, so
+  concurrent events never overwrite each other. `runtime.onStartup` records
+  `startedAt`; tabs created within 10 s of it are session restore and are not
+  new (checked again at load, since the two events may arrive in either order).
+  `tabs.onRemoved` drops the tab's keys.
+- **When it acts:** on `tabs.onUpdated` with status `complete`, a new tab still
   on the new tab page or `about:blank` keeps waiting. Otherwise its record is
-  removed, so only its first page counts, and if the setting is still `ask` and
-  other tabs show the page, the worker injects the prompt into the tab's
-  isolated world with `chrome.scripting.executeScript`. Tabs Claude opens with
-  `tabs.open` are marked `bridgeTab:<id>` and never get the prompt; the mark is
-  checked at load time because `onCreated` may fire before `tabs.create`
-  resolves.
-- **The prompt:** a card in a closed shadow root, built without `innerHTML` and
-  styled through the CSSOM so a strict page CSP cannot block it. It never takes
-  focus and hides itself 15 s after the tab is first shown (a tab opened in the
-  background waits until it is switched to) unless the pointer is on it. Its buttons
-  act only on trusted clicks (`event.isTrusted`), so page scripts cannot press
-  them.
-- **Closing:** the button sends `{ type: "duplicates.closeOlder" }` with
-  `chrome.runtime.sendMessage`. The worker answers only when the sender is this
-  extension (`sender.id`), in a tab's top frame (`frameId` 0), and the setting
-  is still `ask`. It then reads the sender tab afresh, works out its duplicates
-  again at click time and closes exactly those, replying `{ closed: n }`.
-  Nothing the page says is used.
+  removed, so only its first page counts, and the worker reads the action
+  again. Tabs Claude opens with `tabs.open` are marked `bridgeTab:<id>` and are
+  left alone, as are tabs Undo brought back (`restoredTab:<id>`, below). Both
+  marks are read at load time, as late as possible, because they may land
+  after the tab was created: `onCreated` may fire before `tabs.create` or
+  `sessions.restore` resolves.
+- **Ask:** if other tabs show the page, the worker injects the card into the
+  tab's isolated world with `chrome.scripting.executeScript`.
+- **Auto-close:** the worker reads all tabs afresh and closes the duplicates
+  except any tab that is active in its window, so Command+clicking a link to
+  the page you are reading never closes it under you. If nothing is left to
+  close it does nothing. Auto-closes run one at a time, and each first checks
+  that its own tab still exists, so two copies loading together cannot close
+  each other. After closing, it records what Undo may restore, then injects the
+  notice with the number closed. On a page Chrome does not let extensions
+  script (the Chrome Web Store, for one) the tabs still close but no notice
+  appears; Command+Shift+T reopens them.
+- **The card:** in a closed shadow root, built without `innerHTML` and styled
+  through the CSSOM so a strict page CSP cannot block it. It never takes focus,
+  replaces an earlier card in the same tab, and hides itself 15 s after the tab
+  is first shown (a tab opened in the background waits until it is switched
+  to) unless the pointer is on it. Its buttons act only on trusted clicks
+  (`event.isTrusted`), so page scripts cannot press them. Asking, it says
+  "Already open in N other tabs" with Keep and Close older tabs; after an
+  auto-close, "Closed N older tabs" with OK and Undo (singular for one tab).
+- **Messages:** Close older tabs sends `{ type: "duplicates.closeOlder" }` and
+  Undo sends `{ type: "duplicates.undo" }` with `chrome.runtime.sendMessage`.
+  The worker answers them only from this extension (`sender.id`) in a tab's
+  top frame (`frameId` 0), and acts on that sender tab. Nothing the page says
+  is used.
+- **Closing:** for `duplicates.closeOlder` the action must still be `ask`. The
+  worker reads the sender tab afresh, works out its duplicates again at click
+  time and closes exactly those (active ones included: the click asked for
+  them), replying `{ closed: n }`.
+- **Undo:** right after an auto-close the worker asks
+  `chrome.sessions.getRecentlyClosed` (hence the `sessions` permission) for the
+  entries of the tabs it closed: a tab entry with the same URL, or a window
+  entry holding one, each used once and none dated more than a second before
+  the worker acted (Chrome dates them in whole seconds). If some are missing
+  it asks once more after 200 ms. It stores their session ids as `undo:<id>`
+  for the new tab. `duplicates.undo` reads and deletes that record, so it
+  works once and only for what the worker itself recorded for the sender tab,
+  and restores each id with `chrome.sessions.restore`, one failure (an entry
+  already reopened) not costing the rest. Every tab that comes back is marked
+  `restoredTab:<id>`; otherwise its own load would auto-close the tab Undo was
+  clicked in. It replies `{ restored: n }`, the number of tabs. Undo does not
+  depend on the current action.
+- **Command+Shift+T** on an auto-closed tab reopens it as a new tab like any
+  other, so it auto-closes the newer copy in turn (unless that one is active)
+  and shows its own notice with Undo. That is accepted rather than
+  special-cased.
 
 ## Apply relay page
 
@@ -225,10 +266,11 @@ document.dispatchEvent(new CustomEvent("chromefile:request", {
   `document.documentElement.dataset.chromefileApply = "1"`; the CLI treats a
   page without that marker as a missing or outdated extension.
 - `method` is `get` or `set`. `key` must be in a small allow-list (today only
-  `duplicates`, with values `ask` and `allow`); anything else gets
-  `ok: false` with an error naming the problem. `value` in a reply is what is
-  stored after the operation, read back from storage, with a missing value
-  reported as `allow`.
+  `duplicates`, with values `none`, `ask` and `auto-close-duplicates`);
+  anything else gets `ok: false` with an error naming the problem. `value` in a
+  reply is what is stored after the operation, read back from storage, with
+  anything else (nothing stored, or the `allow` an earlier version stored)
+  reported as `none`.
 - A request without a usable `id` (non-empty string, at most 100 characters)
   or whose `detail` is not a JSON object string is ignored: there is nobody to
   answer.

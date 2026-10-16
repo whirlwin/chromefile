@@ -3,8 +3,8 @@ export const NATIVE_HOST_NAME = "io.whirlwin.chromefile";
 
 // chrome.storage.local: the kill switch, toggled from the popup.
 export const ENABLED_KEY = "enabled";
-// chrome.storage.local: Chromefile's `tabs.duplicates`, written by
-// `chromefile apply` through apply.html. Missing means "allow".
+// chrome.storage.local: Chromefile's `tabs.duplicate.action`, written by
+// `chromefile apply` through apply.html. Missing means "none".
 export const DUPLICATES_KEY = "duplicates";
 // chrome.storage.session: written by the worker, read by the popup.
 export const STATUS_KEY = "status";
@@ -15,14 +15,17 @@ export function userScriptsHint(extensionId: string): string {
   return `Enable 'Allow User Scripts' on the extension's Details page (chrome://extensions/?id=${extensionId})`;
 }
 
-// "ask": a new tab showing a page that is already open offers to close the
-// older tabs. "allow": duplicates are left alone.
-export type DuplicatesSetting = "ask" | "allow";
+// What happens when a new tab shows a page that is already open. "none":
+// nothing. "ask": the new tab offers to close the older tabs.
+// "auto-close-duplicates": the older tabs close at once and the new tab offers
+// Undo.
+export type DuplicateAction = "none" | "ask" | "auto-close-duplicates";
 
 // The one reading of DUPLICATES_KEY, so the worker and apply.html agree:
-// anything but "ask", including nothing stored, is "allow".
-export function duplicatesSetting(stored: unknown): DuplicatesSetting {
-  return stored === "ask" ? "ask" : "allow";
+// anything but "ask" or "auto-close-duplicates" is "none", including nothing
+// stored and the "allow" an earlier version stored.
+export function duplicateAction(stored: unknown): DuplicateAction {
+  return stored === "ask" || stored === "auto-close-duplicates" ? stored : "none";
 }
 
 // What the worker publishes for the popup under STATUS_KEY.

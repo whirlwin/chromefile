@@ -3,7 +3,8 @@ version: 1
 
 tabs:
   layout: vertical          # vertical | horizontal
-  duplicates: ask           # ask | allow
+  duplicate:
+    action: ask             # none | ask | auto-close-duplicates
 
 hotkeys:
   tab.next: Command+J       # the tab below (vertical) or to the right (horizontal), wrapping around

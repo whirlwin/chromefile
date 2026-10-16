@@ -27,19 +27,32 @@ impl Layout {
     }
 }
 
-/// `tabs.duplicates` (section 5.2).
+/// `tabs.duplicate.action` (section 5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Duplicates {
+pub enum DuplicateAction {
+    /// `none`; a variant called None would read as Option's.
+    Nothing,
     Ask,
-    Allow,
+    AutoClose,
 }
 
-impl Duplicates {
+impl DuplicateAction {
+    pub const ALL: [DuplicateAction; 3] = [
+        DuplicateAction::Nothing,
+        DuplicateAction::Ask,
+        DuplicateAction::AutoClose,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
-            Duplicates::Ask => "ask",
-            Duplicates::Allow => "allow",
+            DuplicateAction::Nothing => "none",
+            DuplicateAction::Ask => "ask",
+            DuplicateAction::AutoClose => "auto-close-duplicates",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<DuplicateAction> {
+        DuplicateAction::ALL.into_iter().find(|a| a.name() == name)
     }
 }
 
@@ -344,7 +357,7 @@ impl Hotkey {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Chromefile {
     pub layout: Option<Layout>,
-    pub duplicates: Option<Duplicates>,
+    pub duplicate_action: Option<DuplicateAction>,
     /// In file order.
     pub hotkeys: Vec<(Action, Hotkey)>,
 }
@@ -529,14 +542,34 @@ fn tabs(v: &Yaml, file: &mut Chromefile, errors: &mut Vec<String>) {
                 "tabs.layout: must be vertical or horizontal, not {}",
                 describe(v)
             )),
-            (Some("duplicates"), Some("ask")) => file.duplicates = Some(Duplicates::Ask),
-            (Some("duplicates"), Some("allow")) => file.duplicates = Some(Duplicates::Allow),
-            (Some("duplicates"), _) => errors.push(format!(
-                "tabs.duplicates: must be ask or allow, not {}",
-                describe(v)
-            )),
+            (Some("duplicate"), _) => duplicate(v, file, errors),
             _ => errors.push(format!(
-                "tabs.{}: unknown key (allowed: layout, duplicates)",
+                "tabs.{}: unknown key (allowed: layout, duplicate)",
+                key_name(k)
+            )),
+        }
+    }
+}
+
+fn duplicate(v: &Yaml, file: &mut Chromefile, errors: &mut Vec<String>) {
+    let Yaml::Hash(m) = v else {
+        errors.push(format!(
+            "tabs.duplicate: must be a mapping, not {}",
+            describe(v)
+        ));
+        return;
+    };
+    for (k, v) in m {
+        match key_str(k) {
+            Some("action") => match key_str(v).and_then(DuplicateAction::from_name) {
+                Some(action) => file.duplicate_action = Some(action),
+                None => errors.push(format!(
+                    "tabs.duplicate.action: must be none, ask or auto-close-duplicates, not {}",
+                    describe(v)
+                )),
+            },
+            _ => errors.push(format!(
+                "tabs.duplicate.{}: unknown key (allowed: action)",
                 key_name(k)
             )),
         }
@@ -743,7 +776,7 @@ mod tests {
             };
             // Fixtures added later only have to be rejected.
             let want = match name {
-                "bad-duplicates" => "tabs.duplicates:",
+                "bad-duplicate-action" => "tabs.duplicate.action:",
                 "bad-layout" => "tabs.layout:",
                 "command-and-ctrl"
                 | "empty-platform-mapping"
@@ -753,7 +786,9 @@ mod tests {
                 | "shift-only-combo" => "hotkeys.tab.next: ",
                 "duplicate-key" => "the key \"tab.next\" appears twice",
                 "missing-version" => "version: missing",
+                "old-duplicates-key" => "tabs.duplicates: unknown key",
                 "unknown-action" => "hotkeys.tab.close: unknown action",
+                "unknown-duplicate-key" => "tabs.duplicate.when: unknown key",
                 "unknown-platform" => "hotkeys.tab.next.chromeos: unknown platform",
                 "unknown-tabs-key" => "tabs.side: unknown key",
                 "unknown-top-level-key" => "bookmarks: unknown key",
@@ -767,11 +802,11 @@ mod tests {
     #[test]
     fn parses_the_example() {
         let f = parse(
-            "version: 1\ntabs:\n  layout: vertical\n  duplicates: ask\nhotkeys:\n  tab.next: Command+J\n  tab.previous: Command+K\n",
+            "version: 1\ntabs:\n  layout: vertical\n  duplicate:\n    action: ask\nhotkeys:\n  tab.next: Command+J\n  tab.previous: Command+K\n",
         )
         .unwrap();
         assert_eq!(f.layout, Some(Layout::Vertical));
-        assert_eq!(f.duplicates, Some(Duplicates::Ask));
+        assert_eq!(f.duplicate_action, Some(DuplicateAction::Ask));
         assert_eq!(
             f.hotkeys,
             vec![
@@ -908,7 +943,7 @@ mod tests {
             errors("tabs:\n  side: left\n"),
             vec![
                 "version: missing; add version: 1 (this tool supports version 1)",
-                "tabs.side: unknown key (allowed: layout, duplicates)",
+                "tabs.side: unknown key (allowed: layout, duplicate)",
             ]
         );
     }
@@ -922,7 +957,7 @@ mod tests {
             vec![
                 "1: unknown key (allowed: version, tabs, hotkeys)",
                 "tabs.layout: must be vertical or horizontal, not \"diagonal\"",
-                "tabs.side: unknown key (allowed: layout, duplicates)",
+                "tabs.side: unknown key (allowed: layout, duplicate)",
                 "hotkeys.tab.close: unknown action (allowed: tab.next, tab.previous)",
                 "hotkeys.tab.next.windowz: unknown platform (allowed: mac, windows, linux, default)",
             ]
@@ -930,27 +965,85 @@ mod tests {
     }
 
     #[test]
-    fn parses_tabs_duplicates() {
-        for want in [Duplicates::Ask, Duplicates::Allow] {
+    fn parses_tabs_duplicate_action() {
+        for (value, want) in [
+            ("none", DuplicateAction::Nothing),
+            ("ask", DuplicateAction::Ask),
+            ("auto-close-duplicates", DuplicateAction::AutoClose),
+        ] {
+            assert_eq!(want.name(), value);
             let f = parse(&format!(
-                "version: 1\ntabs:\n  duplicates: {}\n",
-                want.name()
+                "version: 1\ntabs:\n  duplicate:\n    action: {value}\n"
             ))
             .unwrap();
-            assert_eq!(f.duplicates, Some(want));
+            assert_eq!(f.duplicate_action, Some(want));
             assert_eq!(f.layout, None);
         }
+        // YAML 1.2 reads none as a string; only null, Null, NULL and ~ are
+        // null.
+        assert!(parse("version: 1\ntabs: {duplicate: {action: none}}\n").is_ok());
         for (value, shown) in [
+            ("allow", "\"allow\""),
             ("true", "the boolean true"),
             ("yes", "\"yes\""),
             ("Ask", "\"Ask\""),
+            ("auto_close_duplicates", "\"auto_close_duplicates\""),
+            ("~", "empty (null)"),
             ("[ask]", "a list"),
         ] {
             assert_eq!(
-                one_error(&format!("version: 1\ntabs:\n  duplicates: {value}\n")),
-                format!("tabs.duplicates: must be ask or allow, not {shown}")
+                one_error(&format!(
+                    "version: 1\ntabs:\n  duplicate:\n    action: {value}\n"
+                )),
+                format!(
+                    "tabs.duplicate.action: must be none, ask or auto-close-duplicates, not {shown}"
+                )
             );
         }
+    }
+
+    #[test]
+    fn checks_the_tabs_duplicate_mapping() {
+        // An empty mapping sets nothing.
+        assert_eq!(
+            parse("version: 1\ntabs:\n  duplicate: {}\n").unwrap(),
+            Chromefile::default()
+        );
+        assert_eq!(
+            one_error("version: 1\ntabs:\n  duplicate:\n    when: always\n"),
+            "tabs.duplicate.when: unknown key (allowed: action)"
+        );
+        // The value of the old tabs.duplicates in the new key's place.
+        assert_eq!(
+            one_error("version: 1\ntabs:\n  duplicate: ask\n"),
+            "tabs.duplicate: must be a mapping, not \"ask\""
+        );
+        assert_eq!(
+            one_error("version: 1\ntabs:\n  duplicate:\n"),
+            "tabs.duplicate: must be a mapping, not empty (null)"
+        );
+        assert_eq!(
+            one_error("version: 1\ntabs:\n  duplicate: [ask]\n"),
+            "tabs.duplicate: must be a mapping, not a list"
+        );
+        // tabs.duplicates is gone, like any other unknown key.
+        for value in ["ask", "allow"] {
+            assert_eq!(
+                one_error(&format!("version: 1\ntabs:\n  duplicates: {value}\n")),
+                "tabs.duplicates: unknown key (allowed: layout, duplicate)"
+            );
+        }
+        // Each error is reported, beside the others.
+        assert_eq!(
+            errors(
+                "version: 1\ntabs:\n  duplicate:\n    action: allow\n    when: always\n  duplicates: ask\n"
+            ),
+            vec![
+                "tabs.duplicate.action: must be none, ask or auto-close-duplicates, not \"allow\"",
+                "tabs.duplicate.when: unknown key (allowed: action)",
+                "tabs.duplicates: unknown key (allowed: layout, duplicate)",
+            ]
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 // Requests `chromefile apply` sends to apply.html (docs/architecture.md, "Apply
 // relay page"). Kept apart from apply.ts, which registers its listener on
 // import, so the parsing can be tested without a DOM.
-import { DUPLICATES_KEY, duplicatesSetting } from "./constants";
-import type { DuplicatesSetting } from "./constants";
+import { DUPLICATES_KEY, duplicateAction } from "./constants";
+import type { DuplicateAction } from "./constants";
 
 export const MAX_ID = 100;
 const METHODS = ["get", "set"] as const;
@@ -19,7 +19,7 @@ export interface Setting {
 // The only chrome.storage.local keys apply.html reads or writes, by storage
 // key. A new setting the CLI should manage goes here.
 export const SETTINGS: Record<string, Setting> = {
-  [DUPLICATES_KEY]: { values: ["ask", "allow"] satisfies DuplicatesSetting[], read: duplicatesSetting },
+  [DUPLICATES_KEY]: { values: ["none", "ask", "auto-close-duplicates"] satisfies DuplicateAction[], read: duplicateAction },
 };
 
 export type ApplyRequest =

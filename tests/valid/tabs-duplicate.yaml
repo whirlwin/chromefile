@@ -1,0 +1,5 @@
+version: 1
+tabs:
+  layout: vertical
+  duplicate:
+    action: auto-close-duplicates

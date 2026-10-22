@@ -21,12 +21,12 @@
           "enum": ["vertical", "horizontal"]
         },
         "duplicate": {
-          "description": "What happens when a new tab loads a page another tab in the same profile already shows. URLs are compared without the fragment.",
+          "description": "What happens when a tab starts showing a page another tab in the same profile already shows: a new tab loading its first page, or a tab that is active in its window navigating to another page. URLs are compared without the fragment; reloading, or moving to another fragment, does not count.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "action": {
-              "description": "none: nothing special happens. ask: the new tab offers to close the older tab or tabs, never closing one without confirmation. auto-close-duplicates: the older tabs are closed without asking, except a tab that is active in its window. Pinned tabs are never offered or closed.",
+              "description": "none: nothing special happens. ask: the tab that started showing the page offers to close the older tab or tabs (those that showed it first), never closing one without confirmation. auto-close-duplicates: the older tabs are closed without asking, except a tab that is active in its window. Pinned tabs are never offered or closed.",
               "enum": ["none", "ask", "auto-close-duplicates"]
             }
           }

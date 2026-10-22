@@ -1,4 +1,5 @@
-// The card a new tab shows when its page is already open (see duplicates.ts).
+// The card a tab shows when it starts showing a page that is already open (see
+// duplicates.ts).
 // "ask": `count` other tabs show it, and the card offers to close them.
 // "closed": `count` older tabs were just closed, and the card offers Undo.
 // chrome.scripting.executeScript serializes this function and runs it in the

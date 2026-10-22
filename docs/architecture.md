@@ -172,33 +172,84 @@ off.
 ## Duplicate tabs
 
 `tabs.duplicate.action` (`duplicates` in `chrome.storage.local`, set by
-`chromefile apply`) says what happens when a new tab loads a page another tab
-already shows:
+`chromefile apply`) says what happens when a tab starts showing a page another
+tab already shows: a new tab loading its first page, or an existing tab
+navigating to another page. That tab plays the part of the new one, and the
+other tabs, which had the page first, are the older ones:
 
 - `none` (also what a missing value, or the `allow` an earlier version stored,
   means): nothing.
-- `ask`: the new tab shows a card offering to close the older tabs.
-- `auto-close-duplicates`: the older tabs close at once and the new tab shows
-  a notice offering Undo.
+- `ask`: the tab shows a card offering to close the older tabs.
+- `auto-close-duplicates`: the older tabs close at once and the tab shows a
+  notice offering Undo.
 
 The same page means the same `http(s)` URL without its fragment, in a tab with
 the same incognito state. Pinned tabs are never offered or closed.
 
-- **Which tabs are new:** the worker may be suspended between a tab's creation
-  and its load, so unless the action is `none`, `tabs.onCreated` records
-  `newTab:<id>` (the creation time) in `storage.session`, one key per tab, so
-  concurrent events never overwrite each other. `runtime.onStartup` records
-  `startedAt`; tabs created within 10 s of it are session restore and are not
-  new (checked again at load, since the two events may arrive in either order).
-  `tabs.onRemoved` drops the tab's keys.
-- **When it acts:** on `tabs.onUpdated` with status `complete`, a new tab still
-  on the new tab page or `about:blank` keeps waiting. Otherwise its record is
-  removed, so only its first page counts, and the worker reads the action
-  again. Tabs Claude opens with `tabs.open` are marked `bridgeTab:<id>` and are
-  left alone, as are tabs Undo brought back (`restoredTab:<id>`, below). Both
-  marks are read at load time, as late as possible, because they may land
-  after the tab was created: `onCreated` may fire before `tabs.create` or
-  `sessions.restore` resolves.
+- **What each tab shows:** the worker may be suspended between events, so it
+  keeps `shown:<id>` in `storage.session`, one key per tab, so concurrent
+  events never overwrite each other. The record is a number for a new tab that
+  has shown no page yet (its creation time, kept for the startup check below),
+  a string for the page key the tab last showed (`""` for a page that is not
+  `http(s)`), or missing for a tab the worker has never seen, whose first load
+  is only recorded. `tabs.onCreated` records the creation time unless the tab
+  was created within 10 s of `startedAt`, which `runtime.onStartup` records:
+  those tabs are session restore. The check is made again at load, since
+  `onStartup` and the restored tabs' `onCreated` may arrive in either order.
+  `storage.session` starts empty after the extension is installed, updated or
+  re-enabled, and re-enabling fires neither `onInstalled` nor `onStartup`. So
+  every time the worker starts it records each open tab that has no record
+  yet, as it is, before any task from the event that woke it; that tab's next
+  navigation then counts instead of only being recorded. This is cheap:
+  records outlive the worker's suspension, so normally none is missing. A tab
+  with no URL yet is skipped (before a navigation commits, Chrome may report
+  an empty `url` and the target in `pendingUrl`), since recording `""` would
+  make its load count as a change; it stays unseen and its load is only
+  recorded. If the new id of `tabs.onReplaced` has no record yet it gets the
+  old id's, so the swap counts as a navigation, and the old id's keys are
+  dropped, since no `onRemoved` fires for it. `tabs.onRemoved` drops
+  `shown:<id>`, `bridgeTab:<id>`, `undo:<id>` and `skip:<id>`. Records are
+  kept up to date whatever the action, so switching from `none` to `ask` never
+  compares with stale ones.
+- **When it acts:** a load is handled on `tabs.onUpdated` with status
+  `complete`, and also when the URL changes in a tab that has already finished
+  loading (a same-document navigation, such as `history.pushState` in a
+  single-page app). A new tab still on the new tab page or `about:blank` keeps
+  waiting. Otherwise the worker compares the page key with the record. The
+  same key (a reload, another fragment, a discarded tab reloading) changes
+  nothing. A different one replaces the record, and for an `http(s)` page the
+  worker reads the action again and acts if the tab was new (and not restored
+  at startup), or if it had already shown a page and is active in its window
+  (the tab its window shows, whether or not that window has focus), unless
+  the tab has a live skip mark (below), or the browser started less than 10 s
+  ago (a restored tab redirecting while it loads has not been navigated, and
+  the open tabs were recorded as restored). A navigation in a background tab
+  (an auto-refresh, a sign-in redirect, a meta refresh) only updates the
+  record, so nothing is closed or prompted from a tab its window is not
+  showing.
+  Records change one event at a time, in the order the events arrived, so the
+  two events one navigation may bring cannot both see the old page and both
+  act.
+- **Left alone:** tabs Claude opens with `tabs.open` are marked
+  `bridgeTab:<id>` and left alone for their whole life. The mark is read as
+  late as possible, just before acting, because it may land after the tab was
+  created: `onCreated` may fire before `tabs.create` resolves. `skip:<id>`
+  holds the time it was set, and for 60 s after that the tab's record is still
+  updated but nothing it starts showing is acted on. The bridge's
+  `tabs.navigate` sets it before `chrome.tabs.update`, so Claude's navigation
+  is left alone, and Undo sets it on each tab it restores (below). 60 s is
+  generous on purpose. It is measured from before the navigation starts, and
+  must outlast a slow page reaching status `complete` and a single-page app
+  rewriting its URL after that (with `replaceState` or a script redirect),
+  which a mark spent on the first change would not. A mark still live when
+  the user navigates costs only a prompt or a close not made. The mark is
+  never removed when a page is recorded, because it is set outside the record
+  queue and a read-then-remove could drop a newer one: it runs out on its
+  own, `tabs.onRemoved` drops it, and a later mark replaces it. Since it runs
+  out, `tabs.navigate` neither compares the target with the current page nor
+  removes the mark when the update fails: a mark whose navigation never
+  changes the record (the same page, a download, a 204) just expires instead
+  of swallowing the user's next navigation.
 - **Ask:** if other tabs show the page, the worker injects the card into the
   tab's isolated world with `chrome.scripting.executeScript`.
 - **Auto-close:** the worker reads all tabs afresh and closes the duplicates
@@ -233,13 +284,14 @@ the same incognito state. Pinned tabs are never offered or closed.
   entry holding one, each used once and none dated more than a second before
   the worker acted (Chrome dates them in whole seconds). If some are missing
   it asks once more after 200 ms. It stores their session ids as `undo:<id>`
-  for the new tab. `duplicates.undo` reads and deletes that record, so it
-  works once and only for what the worker itself recorded for the sender tab,
-  and restores each id with `chrome.sessions.restore`, one failure (an entry
-  already reopened) not costing the rest. Every tab that comes back is marked
-  `restoredTab:<id>`; otherwise its own load would auto-close the tab Undo was
-  clicked in. It replies `{ restored: n }`, the number of tabs. Undo does not
-  depend on the current action.
+  for the tab it acted in. `duplicates.undo` reads and deletes that record, so
+  it works once and only for what the worker itself recorded for the sender
+  tab, and restores each id with `chrome.sessions.restore`, one failure (an
+  entry already reopened) not costing the rest. Every tab that comes back is
+  marked `skip:<id>`; otherwise the load that brings it back would auto-close
+  the tab Undo was clicked in. Once the mark's 60 s are up, its navigations
+  count like any other tab's. It replies `{ restored: n }`, the number of
+  tabs. Undo does not depend on the current action.
 - **Command+Shift+T** on an auto-closed tab reopens it as a new tab like any
   other, so it auto-closes the newer copy in turn (unless that one is active)
   and shows its own notice with Undo. That is accepted rather than

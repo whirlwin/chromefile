@@ -58,7 +58,7 @@ Which side a vertical tab strip is placed on (left or right) is out of scope for
 
 ### 5.2 `tabs.duplicate`
 
-OPTIONAL mapping. What happens when a new tab loads a page that another tab in the same browser profile already shows, in any window. Its only key is `action`, which is the setting; an empty mapping sets nothing.
+OPTIONAL mapping. What happens when a tab starts showing a page that another tab in the same browser profile already shows, in any window: a new tab loading its first page, or a tab navigating to another page (rule 3 below says which count). The other tabs showing the page had it first, and are called the older tabs. Its only key is `action`, which is the setting; an empty mapping sets nothing.
 
 #### `tabs.duplicate.action`
 
@@ -67,8 +67,8 @@ OPTIONAL. One of:
 | Value                   | Meaning |
 |-------------------------|---------|
 | `none`                  | Nothing special happens: the browser's default behaviour. |
-| `ask`                   | The browser shows a small prompt in the new tab offering to close the older tab or tabs. |
-| `auto-close-duplicates` | The browser closes the older tab or tabs without asking, so the new tab is the only one showing the page. |
+| `ask`                   | The browser shows a small prompt in the tab that started showing the page, offering to close the older tab or tabs. |
+| `auto-close-duplicates` | The browser closes the older tab or tabs without asking, so the tab that started showing the page is the only one showing it. |
 
 Leaving the key out leaves the behaviour as it is (section 7); `none` turns `ask` and `auto-close-duplicates` off.
 
@@ -76,8 +76,8 @@ Rules for `ask` and `auto-close-duplicates`:
 
 1. Two tabs show the same page when their URLs are equal after removing the fragment (the `#` and everything after it). The rest of the URL, including scheme, host, path and query, is compared exactly.
 2. Pinned tabs are never offered for closing, and never closed. If every other tab showing the page is pinned, nothing happens.
-3. The action is taken at most once per new tab, when it loads its first page. The browser's new tab page and `about:blank` do not count as a page.
-4. Tabs restored when the browser starts (session restore) are not new tabs.
+3. The action is taken when a tab starts showing a different page (in the sense of rule 1): when a new tab loads its first page, whether or not it is active in its window, and when a tab that is active (the tab shown) in its window navigates to another page. It counts however the tab navigates, including a page script changing the URL without loading a new document. Reloading a page, or moving to another fragment of it, does not change the page and does not count. Nor does a navigation in a tab that is not active in its window (an automatic refresh or a sign-in redirect, say), so that nothing is closed or prompted from a tab its window is not showing. The browser's new tab page and `about:blank` do not count as a page.
+4. Tabs restored when the browser starts (session restore) are not new tabs, and loading the page they were restored with is not a navigation. Their next navigation counts.
 5. A tool that cannot carry out the action in a given browser MUST report the setting as `unsupported` (section 7).
 
 With `ask`, a tab MUST NOT be closed without the user's confirmation.

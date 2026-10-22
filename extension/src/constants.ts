@@ -15,9 +15,9 @@ export function userScriptsHint(extensionId: string): string {
   return `Enable 'Allow User Scripts' on the extension's Details page (chrome://extensions/?id=${extensionId})`;
 }
 
-// What happens when a new tab shows a page that is already open. "none":
-// nothing. "ask": the new tab offers to close the older tabs.
-// "auto-close-duplicates": the older tabs close at once and the new tab offers
+// What happens when a tab starts showing a page that is already open. "none":
+// nothing. "ask": that tab offers to close the older tabs.
+// "auto-close-duplicates": the older tabs close at once and that tab offers
 // Undo.
 export type DuplicateAction = "none" | "ask" | "auto-close-duplicates";
 

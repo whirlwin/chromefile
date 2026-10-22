@@ -8,6 +8,7 @@ const call = (method: string, params: Record<string, unknown> = {}) => dispatch(
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("chrome.call", () => {
@@ -21,6 +22,46 @@ describe("chrome.call", () => {
     vi.stubGlobal("chrome", { cookies: {} });
     expect(await call("chrome.call", { path: "cookies.getAll", args: {} })).toMatchObject({ error: { code: "bad_request" } });
     expect(await call("chrome.call", { path: "cookies.getAll" })).toMatchObject({ error: { code: "not_found" } });
+  });
+});
+
+describe("tabs.navigate", () => {
+  const url = "https://example.com/";
+  const tab = { id: 7, windowId: 1, url, title: "Example", active: true, groupId: -1 };
+
+  it("marks the tab before loading the URL and returns the tab", async () => {
+    const set = vi.fn(async () => {});
+    const update = vi.fn(async () => tab);
+    vi.stubGlobal("chrome", { storage: { session: { set } }, tabs: { update } });
+    expect(await call("tabs.navigate", { tabId: 7, url })).toEqual({ id: "1", result: { tab } });
+    expect(set).toHaveBeenCalledWith({ "skip:7": expect.any(Number) });
+    expect(update).toHaveBeenCalledWith(7, { url });
+    expect(set.mock.invocationCallOrder[0]!).toBeLessThan(update.mock.invocationCallOrder[0]!);
+  });
+
+  it("still navigates when the mark cannot be written", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const set = vi.fn(async () => {
+      throw new Error("Session storage quota exceeded");
+    });
+    const update = vi.fn(async () => tab);
+    vi.stubGlobal("chrome", { storage: { session: { set } }, tabs: { update } });
+    expect(await call("tabs.navigate", { tabId: 7, url })).toEqual({ id: "1", result: { tab } });
+    expect(update).toHaveBeenCalledWith(7, { url });
+  });
+
+  it("reports a tab that is gone as not_found and leaves the mark to run out", async () => {
+    const set = vi.fn(async () => {});
+    const remove = vi.fn(async () => {});
+    const update = vi.fn(async () => {
+      throw new Error("No tab with id: 7.");
+    });
+    vi.stubGlobal("chrome", { storage: { session: { set, remove } }, tabs: { update } });
+    expect(await call("tabs.navigate", { tabId: 7, url })).toEqual({
+      id: "1",
+      error: { code: "not_found", message: "No tab with id: 7." },
+    });
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 

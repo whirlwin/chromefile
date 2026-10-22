@@ -1,4 +1,4 @@
-import { markBridgeTab } from "../duplicates";
+import { markBridgeNavigation, markBridgeTab } from "../duplicates";
 import type { HandlerMap } from "../protocol";
 import { numList, optBool, oneOf, optStr, str } from "../params";
 import { resolveTabId } from "../target";
@@ -34,7 +34,12 @@ export const tabsMethods: HandlerMap = {
   },
 
   "tabs.navigate": async (params) => {
-    const tab = await chrome.tabs.update(await resolveTabId(params), { url: str(params, "url") });
+    const tabId = await resolveTabId(params);
+    const url = str(params, "url");
+    // Marked first, so the page's load cannot run ahead of the mark. If the
+    // update fails, the mark runs out on its own.
+    await markBridgeNavigation(tabId);
+    const tab = await chrome.tabs.update(tabId, { url });
     return { tab: tab ? summarize(tab) : undefined };
   },
 

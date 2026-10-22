@@ -5,9 +5,12 @@ import {
   CLOSE_OLDER,
   inQuietPeriod,
   isBlankPage,
+  isSkipped,
   olderDuplicates,
+  pageChange,
   pageKey,
   QUIET_MS,
+  SKIP_MS,
   toAutoClose,
   UNDO,
   undoSessionIds,
@@ -177,6 +180,87 @@ describe("inQuietPeriod", () => {
 
   it("is off when onStartup has not fired this session", () => {
     expect(inQuietPeriod(startedAt, undefined)).toBe(false);
+  });
+});
+
+describe("isSkipped", () => {
+  const markedAt = 1_000_000;
+
+  it("is true for SKIP_MS from when the mark was set", () => {
+    expect(isSkipped(markedAt, markedAt)).toBe(true);
+    expect(isSkipped(markedAt, markedAt + SKIP_MS - 1)).toBe(true);
+    expect(isSkipped(markedAt, markedAt + SKIP_MS)).toBe(false);
+  });
+
+  it("is false without a mark, or for anything but a time", () => {
+    for (const mark of [undefined, null, true, "1000000", {}]) expect(isSkipped(mark, markedAt)).toBe(false);
+  });
+});
+
+describe("pageChange", () => {
+  const startedAt = 1_000_000;
+  const createdAt = startedAt + QUIET_MS;
+  const later = startedAt + QUIET_MS;
+  const other = "https://example.com/other";
+
+  it("lets a new tab on a blank page keep waiting", () => {
+    for (const url of ["chrome://newtab/", "chrome://new-tab-page/", "about:blank", "", undefined]) {
+      expect(pageChange(createdAt, url, true, startedAt, later)).toEqual({ act: false });
+    }
+  });
+
+  it("acts on a new tab's first page, active or not, without its fragment", () => {
+    expect(pageChange(createdAt, `${page}#top`, false, startedAt, later)).toEqual({ record: page, act: true });
+    expect(pageChange(createdAt, page, true, startedAt, later)).toEqual({ record: page, act: true });
+    expect(pageChange(createdAt, page, undefined, undefined, later)).toEqual({ record: page, act: true });
+  });
+
+  it("records but never acts on a new tab created during session restore", () => {
+    expect(pageChange(startedAt + QUIET_MS - 1, page, true, startedAt, later)).toEqual({ record: page, act: false });
+  });
+
+  it("records a new tab's first page it cannot handle as none", () => {
+    expect(pageChange(createdAt, "chrome://settings/", true, startedAt, later)).toEqual({ record: "", act: false });
+  });
+
+  it("does nothing while a tab shows the same page", () => {
+    expect(pageChange(page, page, true, startedAt, later)).toEqual({ act: false });
+    expect(pageChange(page, `${page}#section`, true, startedAt, later)).toEqual({ act: false });
+    expect(pageChange("", "chrome://extensions/", true, startedAt, later)).toEqual({ act: false });
+    expect(pageChange("", undefined, true, startedAt, later)).toEqual({ act: false });
+  });
+
+  it("acts when the active tab moves to a different page", () => {
+    expect(pageChange(other, `${page}#top`, true, startedAt, later)).toEqual({ record: page, act: true });
+  });
+
+  it("records but never acts when a tab moves during session restore", () => {
+    expect(pageChange(other, page, true, startedAt, startedAt + QUIET_MS - 1)).toEqual({ record: page, act: false });
+  });
+
+  it("records but never acts when a background tab moves", () => {
+    expect(pageChange(other, page, false, startedAt, later)).toEqual({ record: page, act: false });
+    expect(pageChange(other, page, undefined, startedAt, later)).toEqual({ record: page, act: false });
+  });
+
+  it("records a move to a page it cannot handle as none, without acting", () => {
+    expect(pageChange(page, "chrome://settings/", true, startedAt, later)).toEqual({ record: "", act: false });
+    expect(pageChange(page, "about:blank", true, startedAt, later)).toEqual({ record: "", act: false });
+  });
+
+  it("acts when the active tab moves from a page it cannot handle to one it can", () => {
+    expect(pageChange("", page, true, startedAt, later)).toEqual({ record: page, act: true });
+  });
+
+  it("records but never acts when a background tab moves from a page it cannot handle to one it can", () => {
+    expect(pageChange("", page, false, startedAt, later)).toEqual({ record: page, act: false });
+  });
+
+  it("only records a tab it has never seen, whatever it shows", () => {
+    for (const shown of [undefined, null, {}, true]) {
+      expect(pageChange(shown, page, true, startedAt, later)).toEqual({ record: page, act: false });
+      expect(pageChange(shown, "chrome://newtab/", true, startedAt, later)).toEqual({ record: "", act: false });
+    }
   });
 });
 

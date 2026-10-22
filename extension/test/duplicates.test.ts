@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import { duplicateAction } from "../src/constants";
 import { showDuplicatePrompt } from "../src/duplicatePrompt";
 import {
+  activationActs,
   CLOSE_OLDER,
   inQuietPeriod,
+  isApplyHelper,
   isBlankPage,
   isSkipped,
+  KEEP,
+  loadActs,
   olderDuplicates,
   pageChange,
   pageKey,
@@ -156,6 +160,31 @@ describe("undoSessionIds", () => {
   });
 });
 
+describe("isApplyHelper", () => {
+  it("is true for the helper tabs chromefile apply opens", () => {
+    for (const url of [
+      "chrome://settings/?chromefile=1f2e",
+      "chrome://extensions/?chromefile=1f2e",
+      "chrome-extension://abc/apply.html?chromefile=1f2e",
+    ]) {
+      expect(isApplyHelper(url)).toBe(true);
+    }
+  });
+
+  it("is false for web pages, chrome pages without the marker and garbage", () => {
+    for (const url of [
+      "https://example.com/?chromefile=1f2e",
+      "chrome://settings/",
+      "chrome-extension://abc/apply.html?other=1",
+      "not a url",
+      "",
+      undefined,
+    ]) {
+      expect(isApplyHelper(url)).toBe(false);
+    }
+  });
+});
+
 describe("isBlankPage", () => {
   it("is true while a new tab has not picked a page", () => {
     for (const url of ["chrome://newtab/", "chrome://new-tab-page/", "about:blank", "", undefined]) {
@@ -264,6 +293,95 @@ describe("pageChange", () => {
   });
 });
 
+describe("activationActs", () => {
+  const startedAt = 1_000_000;
+  const later = startedAt + QUIET_MS;
+
+  it("acts on an http(s) page still shown, with no marks", () => {
+    expect(activationActs(page, true, undefined, undefined, startedAt, later)).toBe(true);
+    expect(activationActs(page, true, undefined, undefined, undefined, later)).toBe(true);
+  });
+
+  it("never acts on a page it cannot handle", () => {
+    expect(activationActs(null, true, undefined, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("never acts on a tab no longer shown, one only passed through", () => {
+    expect(activationActs(page, false, undefined, undefined, startedAt, later)).toBe(false);
+    expect(activationActs(page, undefined, undefined, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("never acts while the tab shows the page the user chose Keep on", () => {
+    expect(activationActs(page, true, page, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("acts once the tab shows another page than the one kept", () => {
+    expect(activationActs(page, true, "https://example.com/other", undefined, startedAt, later)).toBe(true);
+    for (const kept of ["", null, true, {}]) expect(activationActs(page, true, kept, undefined, startedAt, later)).toBe(true);
+  });
+
+  it("never acts with a live skip mark, and acts once it runs out", () => {
+    expect(activationActs(page, true, undefined, later - SKIP_MS + 1, startedAt, later)).toBe(false);
+    expect(activationActs(page, true, undefined, later - SKIP_MS, startedAt, later)).toBe(true);
+  });
+
+  it("never acts during session restore", () => {
+    expect(activationActs(page, true, undefined, undefined, startedAt, startedAt + QUIET_MS - 1)).toBe(false);
+  });
+});
+
+describe("loadActs", () => {
+  const startedAt = 1_000_000;
+  const later = startedAt + QUIET_MS;
+  const same = { act: false };
+
+  it("acts on a changed record as pageChange says, once, whether or not the tab was switched to", () => {
+    for (const activated of [undefined, true]) {
+      expect(loadActs({ record: page, act: true }, activated, true, page, undefined, undefined, startedAt, later)).toBe(true);
+    }
+    expect(loadActs({ record: page, act: false }, undefined, true, page, undefined, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("acts on a changed record pageChange does not act on if the switch to the tab would", () => {
+    // A tab never seen, switched to while it loaded: its switch still counts.
+    expect(loadActs({ record: page, act: false }, true, true, page, undefined, undefined, startedAt, later)).toBe(true);
+    expect(loadActs({ record: page, act: false }, true, false, page, undefined, undefined, startedAt, later)).toBe(false);
+    expect(loadActs({ record: page, act: false }, true, true, page, page, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("never acts on a changed record with a live skip mark", () => {
+    expect(loadActs({ record: page, act: true }, undefined, true, page, undefined, later - 1, startedAt, later)).toBe(false);
+    expect(loadActs({ record: page, act: true }, true, true, page, undefined, later - 1, startedAt, later)).toBe(false);
+    expect(loadActs({ record: page, act: true }, undefined, true, page, undefined, later - SKIP_MS, startedAt, later)).toBe(true);
+  });
+
+  it("still acts on a navigation when the tab has a Keep for its page", () => {
+    expect(loadActs({ record: page, act: true }, undefined, true, page, page, undefined, startedAt, later)).toBe(true);
+  });
+
+  it("does nothing for the same page in a tab not switched to while it loaded", () => {
+    for (const activated of [undefined, false, "true", 1]) {
+      expect(loadActs(same, activated, true, page, undefined, undefined, startedAt, later)).toBe(false);
+    }
+  });
+
+  it("acts for the same page in a tab switched to while it loaded and still shown", () => {
+    expect(loadActs(same, true, true, page, undefined, undefined, startedAt, later)).toBe(true);
+  });
+
+  it("never acts once the user has switched away again", () => {
+    expect(loadActs(same, true, false, page, undefined, undefined, startedAt, later)).toBe(false);
+    expect(loadActs(same, true, undefined, page, undefined, undefined, startedAt, later)).toBe(false);
+  });
+
+  it("judges the switch as activationActs does", () => {
+    expect(loadActs(same, true, true, null, undefined, undefined, startedAt, later)).toBe(false);
+    expect(loadActs(same, true, true, page, page, undefined, startedAt, later)).toBe(false);
+    expect(loadActs(same, true, true, page, undefined, later - 1, startedAt, later)).toBe(false);
+    expect(loadActs(same, true, true, page, undefined, undefined, startedAt, startedAt + QUIET_MS - 1)).toBe(false);
+  });
+});
+
 describe("duplicateAction", () => {
   it("keeps the two actions and reads anything else as none", () => {
     expect(duplicateAction("ask")).toBe("ask");
@@ -281,5 +399,6 @@ describe("showDuplicatePrompt", () => {
   it("sends the messages the worker listens for", () => {
     expect(String(showDuplicatePrompt)).toContain(JSON.stringify(CLOSE_OLDER));
     expect(String(showDuplicatePrompt)).toContain(JSON.stringify(UNDO));
+    expect(String(showDuplicatePrompt)).toContain(JSON.stringify(KEEP));
   });
 });

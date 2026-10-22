@@ -1,4 +1,4 @@
-import { markBridgeNavigation, markBridgeTab } from "../duplicates";
+import { markBridgeAction, markBridgeTab } from "../duplicates";
 import type { HandlerMap } from "../protocol";
 import { numList, optBool, oneOf, optStr, str } from "../params";
 import { resolveTabId } from "../target";
@@ -38,13 +38,17 @@ export const tabsMethods: HandlerMap = {
     const url = str(params, "url");
     // Marked first, so the page's load cannot run ahead of the mark. If the
     // update fails, the mark runs out on its own.
-    await markBridgeNavigation(tabId);
+    await markBridgeAction(tabId);
     const tab = await chrome.tabs.update(tabId, { url });
     return { tab: tab ? summarize(tab) : undefined };
   },
 
   "tabs.focus": async (params) => {
-    const tab = await chrome.tabs.update(await resolveTabId(params), { active: true });
+    const tabId = await resolveTabId(params);
+    // Marked first too: switching to a tab may otherwise ask about or close
+    // its duplicates, which Claude bringing it forward must never do.
+    await markBridgeAction(tabId);
+    const tab = await chrome.tabs.update(tabId, { active: true });
     if (tab) await chrome.windows.update(tab.windowId, { focused: true });
     return {};
   },

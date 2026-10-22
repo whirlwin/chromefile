@@ -262,6 +262,7 @@ pub struct Tab {
 /// not: apply.html/ names another file.
 fn helper_url(page: &str, marker: &str) -> String {
     let sep = if page.ends_with(".html") { "?" } else { "/?" };
+    // The extension's duplicate check (isApplyHelper) relies on this marker.
     format!("{page}{sep}chromefile={marker}")
 }
 

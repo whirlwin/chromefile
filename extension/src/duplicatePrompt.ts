@@ -1,6 +1,8 @@
-// The card a tab shows when it starts showing a page that is already open (see
-// duplicates.ts).
-// "ask": `count` other tabs show it, and the card offers to close them.
+// The card a tab shows when it starts showing a page that is already open, or
+// is switched to while it shows one (see duplicates.ts).
+// "ask": `count` other tabs show it, and the card offers to close them. Keep
+// tells the worker, so switching to this tab or the others on this page asks
+// no more.
 // "closed": `count` older tabs were just closed, and the card offers Undo.
 // chrome.scripting.executeScript serializes this function and runs it in the
 // tab's isolated world, so it must be self-contained: no imports and no
@@ -12,9 +14,10 @@
 // act only on trusted clicks, so page scripts cannot press them, and nothing
 // takes focus away from the page.
 export function showDuplicatePrompt(kind: "ask" | "closed", count: number): void {
-  // Keep in sync with CLOSE_OLDER and UNDO in duplicates.ts.
+  // Keep in sync with CLOSE_OLDER, UNDO and KEEP in duplicates.ts.
   const CLOSE_OLDER_TYPE = "duplicates.closeOlder";
   const UNDO_TYPE = "duplicates.undo";
+  const KEEP_TYPE = "duplicates.keep";
   const MARKER = "data-chromefile-duplicates";
   const HIDE_MS = 15_000;
 
@@ -103,7 +106,16 @@ export function showDuplicatePrompt(kind: "ask" | "closed", count: number): void
     }
   });
   secondaryButton.addEventListener("click", (event) => {
-    if (event.isTrusted) hide();
+    if (!event.isTrusted) return;
+    hide();
+    // Keep is remembered by the worker, for this page in this tab and the
+    // others showing it; OK after an auto-close has nothing to tell it.
+    if (!asking) return;
+    try {
+      chrome.runtime.sendMessage({ type: KEEP_TYPE }).catch(() => {});
+    } catch {
+      // The extension was reloaded or removed since this card was shown.
+    }
   });
   card.addEventListener("mouseenter", () => clearTimeout(timer));
   card.addEventListener("mouseleave", arm);

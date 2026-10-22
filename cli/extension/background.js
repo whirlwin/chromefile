@@ -128,6 +128,7 @@ function isObject(value) {
 function showDuplicatePrompt(kind, count) {
   const CLOSE_OLDER_TYPE = "duplicates.closeOlder";
   const UNDO_TYPE = "duplicates.undo";
+  const KEEP_TYPE = "duplicates.keep";
   const MARKER = "data-chromefile-duplicates";
   const HIDE_MS = 15e3;
   const style = (node, styles) => {
@@ -203,7 +204,14 @@ function showDuplicatePrompt(kind, count) {
     }
   });
   secondaryButton.addEventListener("click", (event) => {
-    if (event.isTrusted) hide();
+    if (!event.isTrusted) return;
+    hide();
+    if (!asking) return;
+    try {
+      chrome.runtime.sendMessage({ type: KEEP_TYPE }).catch(() => {
+      });
+    } catch {
+    }
   });
   card.addEventListener("mouseenter", () => clearTimeout(timer));
   card.addEventListener("mouseleave", arm);
@@ -226,6 +234,7 @@ function showDuplicatePrompt(kind, count) {
 // src/duplicates.ts
 var CLOSE_OLDER = "duplicates.closeOlder";
 var UNDO = "duplicates.undo";
+var KEEP = "duplicates.keep";
 var QUIET_MS = 1e4;
 var SKIP_MS = 6e4;
 var STARTED_AT_KEY = "startedAt";
@@ -235,7 +244,9 @@ var shownKey = (tabId) => `shown:${tabId}`;
 var bridgeTabKey = (tabId) => `bridgeTab:${tabId}`;
 var undoKey = (tabId) => `undo:${tabId}`;
 var skipKey = (tabId) => `skip:${tabId}`;
-var TAB_KEYS = [shownKey, bridgeTabKey, undoKey, skipKey];
+var keptKey = (tabId) => `kept:${tabId}`;
+var activatedKey = (tabId) => `activated:${tabId}`;
+var TAB_KEYS = [shownKey, bridgeTabKey, undoKey, skipKey, keptKey, activatedKey];
 var tabKeys = (tabId) => TAB_KEYS.map((key) => key(tabId));
 function pageKey(url) {
   if (!url) return null;
@@ -285,6 +296,15 @@ function restorableUrls(entry) {
   const tabs = entry.tab ? [entry.tab] : entry.window?.tabs ?? [];
   return tabs.flatMap((tab) => tab.url === void 0 ? [] : [tab.url]);
 }
+function isApplyHelper(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return (parsed.protocol === "chrome:" || parsed.protocol === "chrome-extension:") && parsed.searchParams.has("chromefile");
+  } catch {
+    return false;
+  }
+}
 function isBlankPage(url) {
   return !url || BLANK_URLS.has(url);
 }
@@ -305,6 +325,12 @@ function pageChange(shown, url, active, startedAt, now) {
   if (typeof shown !== "string") return { record: page, act: false };
   return { record: page, act: page !== "" && active === true && !inQuietPeriod(now, startedAt) };
 }
+function activationActs(page, active, kept, skip, startedAt, now) {
+  return page !== null && active === true && kept !== page && !isSkipped(skip, now) && !inQuietPeriod(now, startedAt);
+}
+function loadActs(change, activated, active, page, kept, skip, startedAt, now) {
+  return change.act && !isSkipped(skip, now) || activated === true && activationActs(page, active, kept, skip, startedAt, now);
+}
 async function currentAction() {
   const stored = await chrome.storage.local.get(DUPLICATES_KEY);
   return duplicateAction(stored[DUPLICATES_KEY]);
@@ -316,11 +342,11 @@ async function markBridgeTab(tabId) {
     console.warn("duplicates: could not mark bridge tab", tabId, error);
   }
 }
-async function markBridgeNavigation(tabId) {
+async function markBridgeAction(tabId) {
   try {
     await chrome.storage.session.set({ [skipKey(tabId)]: Date.now() });
   } catch (error) {
-    console.warn("duplicates: could not mark bridge navigation", tabId, error);
+    console.warn("duplicates: could not mark bridge action", tabId, error);
   }
 }
 async function leftAlone(tabId) {
@@ -347,23 +373,53 @@ async function tabCreated(tab) {
     if (!inQuietPeriod(now, session[STARTED_AT_KEY])) await chrome.storage.session.set({ [shownKey(tabId)]: now });
   });
 }
-async function tabLoaded(tab) {
+async function tabLoaded(tab, completed) {
   const tabId = tab.id;
   if (tabId === void 0) return;
-  if (!await recordQueued(() => recordPage(tabId, tab))) return;
+  if (!await recordQueued(() => recordPage(tabId, tab, completed))) return;
   const action = await currentAction();
   if (action === "ask") await offerToClose(tabId, tab);
   if (action === "auto-close-duplicates") await autoCloseQueued(tabId);
 }
-async function recordPage(tabId, tab) {
+async function tabActivated(tabId) {
+  const switched = await recordQueued(async () => {
+    const action = await currentAction();
+    if (action === "none") return void 0;
+    const tab = await switchedTo(tabId);
+    return tab === void 0 ? void 0 : { action, tab };
+  });
+  if (switched === void 0) return;
+  if (switched.action === "ask") await offerToClose(tabId, switched.tab);
+  if (switched.action === "auto-close-duplicates") await autoCloseQueued(tabId);
+}
+async function switchedTo(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => void 0);
+  if (tab === void 0) return void 0;
+  const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
+  if (windowTabs.some((other) => isApplyHelper(other.url) || isApplyHelper(other.pendingUrl))) return void 0;
+  if (tab.status !== "complete") {
+    await chrome.storage.session.set({ [activatedKey(tabId)]: true });
+    return void 0;
+  }
+  const kept = keptKey(tabId);
+  const skip = skipKey(tabId);
+  const session = await chrome.storage.session.get([kept, skip, STARTED_AT_KEY]);
+  const page = pageKey(tab.url);
+  return activationActs(page, tab.active, session[kept], session[skip], session[STARTED_AT_KEY], Date.now()) ? tab : void 0;
+}
+async function recordPage(tabId, tab, completed) {
   const key = shownKey(tabId);
   const skip = skipKey(tabId);
-  const session = await chrome.storage.session.get([key, skip, STARTED_AT_KEY]);
+  const kept = keptKey(tabId);
+  const activated = activatedKey(tabId);
+  const session = await chrome.storage.session.get([key, skip, kept, activated, STARTED_AT_KEY]);
   const now = Date.now();
   const change = pageChange(session[key], tab.url, tab.active, session[STARTED_AT_KEY], now);
-  if (change.record === void 0) return false;
-  await chrome.storage.session.set({ [key]: change.record });
-  return change.act && !isSkipped(session[skip], now);
+  if (change.record !== void 0) await chrome.storage.session.set({ [key]: change.record });
+  const switched = completed ? session[activated] : void 0;
+  if (switched !== void 0) await chrome.storage.session.remove(activated);
+  const page = pageKey(tab.url);
+  return loadActs(change, switched, tab.active, page, session[kept], session[skip], session[STARTED_AT_KEY], now);
 }
 async function recordOpenTabs() {
   const tabs = (await chrome.tabs.query({})).flatMap(
@@ -398,8 +454,12 @@ async function autoClose(tabId) {
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find((other) => other.id === tabId);
   if (!tab) return;
-  const targets = toAutoClose(tab, tabs).filter((other) => other.id !== void 0);
-  if (targets.length === 0 || await leftAlone(tabId)) return;
+  const copies = toAutoClose(tab, tabs).filter((other) => other.id !== void 0);
+  if (copies.length === 0) return;
+  const marks = await chrome.storage.session.get([tabId, ...copies.map((other) => other.id)].map(bridgeTabKey));
+  if (marks[bridgeTabKey(tabId)] !== void 0) return;
+  const targets = copies.filter((other) => marks[bridgeTabKey(other.id)] === void 0);
+  if (targets.length === 0) return;
   const since = Math.floor(Date.now() / 1e3) - 1;
   await chrome.tabs.remove(targets.map((other) => other.id));
   try {
@@ -426,6 +486,11 @@ async function undo(tabId) {
   const key = undoKey(tabId);
   const record = (await chrome.storage.session.get(key))[key];
   await chrome.storage.session.remove(key);
+  try {
+    await keep(tabId);
+  } catch (error) {
+    console.warn("duplicates: could not keep", tabId, error);
+  }
   let restored = 0;
   for (const sessionId of recordedSessionIds(record)) {
     try {
@@ -434,7 +499,11 @@ async function undo(tabId) {
       const ids = tabs.flatMap((tab) => tab.id === void 0 ? [] : [tab.id]);
       restored += ids.length;
       const now = Date.now();
-      await chrome.storage.session.set(Object.fromEntries(ids.map((id) => [skipKey(id), now])));
+      const kept = tabs.flatMap((tab) => {
+        const page = pageKey(tab.url || tab.pendingUrl);
+        return tab.id === void 0 || page === null ? [] : [[keptKey(tab.id), page]];
+      });
+      await chrome.storage.session.set(Object.fromEntries([...ids.map((id) => [skipKey(id), now]), ...kept]));
     } catch (error) {
       console.warn("duplicates: could not restore", sessionId, error);
     }
@@ -453,6 +522,19 @@ async function closeOlder(tabId) {
   if (ids.length > 0) await chrome.tabs.remove(ids);
   return { closed: ids.length };
 }
+function keep(tabId) {
+  return recordQueued(async () => {
+    const tab = await chrome.tabs.get(tabId);
+    const page = pageKey(tab.url);
+    if (page === null) return { kept: false };
+    const tabs = await chrome.tabs.query({});
+    const copies = olderDuplicates(tab, tabs.map((other) => ({ ...other, pinned: false }))).flatMap(
+      (other) => other.id === void 0 ? [] : [other.id]
+    );
+    await chrome.storage.session.set(Object.fromEntries([tabId, ...copies].map((id) => [keptKey(id), page])));
+    return { kept: true };
+  });
+}
 function run(what, task) {
   task().catch((error) => console.warn(`duplicates: ${what} failed`, error));
 }
@@ -464,9 +546,10 @@ function initDuplicates() {
   chrome.tabs.onCreated.addListener((tab) => run("tab created", () => tabCreated(tab)));
   chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     if (changeInfo.status === "complete" || changeInfo.url !== void 0 && tab.status === "complete") {
-      run("tab loaded", () => tabLoaded(tab));
+      run("tab loaded", () => tabLoaded(tab, changeInfo.status === "complete"));
     }
   });
+  chrome.tabs.onActivated.addListener(({ tabId }) => run("tab activated", () => tabActivated(tabId)));
   chrome.tabs.onReplaced.addListener(
     (addedTabId, removedTabId) => run("tab replaced", () => recordQueued(() => tabReplaced(addedTabId, removedTabId)))
   );
@@ -475,11 +558,11 @@ function initDuplicates() {
   );
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const type = typeof message === "object" && message !== null ? message.type : void 0;
-    if (type !== CLOSE_OLDER && type !== UNDO) return;
+    if (type !== CLOSE_OLDER && type !== UNDO && type !== KEEP) return;
     const tabId = sender.tab?.id;
     if (sender.id !== chrome.runtime.id || tabId === void 0 || sender.frameId !== 0) return;
-    const task = type === CLOSE_OLDER ? closeOlder(tabId) : undo(tabId);
-    const failed = type === CLOSE_OLDER ? { closed: 0 } : { restored: 0 };
+    const task = type === CLOSE_OLDER ? closeOlder(tabId) : type === UNDO ? undo(tabId) : keep(tabId);
+    const failed = type === CLOSE_OLDER ? { closed: 0 } : type === UNDO ? { restored: 0 } : { kept: false };
     task.then(sendResponse, (error) => {
       console.warn(`duplicates: ${type} failed`, error);
       sendResponse(failed);
@@ -873,12 +956,14 @@ var tabsMethods = {
   "tabs.navigate": async (params) => {
     const tabId = await resolveTabId(params);
     const url = str(params, "url");
-    await markBridgeNavigation(tabId);
+    await markBridgeAction(tabId);
     const tab = await chrome.tabs.update(tabId, { url });
     return { tab: tab ? summarize(tab) : void 0 };
   },
   "tabs.focus": async (params) => {
-    const tab = await chrome.tabs.update(await resolveTabId(params), { active: true });
+    const tabId = await resolveTabId(params);
+    await markBridgeAction(tabId);
+    const tab = await chrome.tabs.update(tabId, { active: true });
     if (tab) await chrome.windows.update(tab.windowId, { focused: true });
     return {};
   },

@@ -65,6 +65,22 @@ describe("tabs.navigate", () => {
   });
 });
 
+describe("tabs.focus", () => {
+  const tab = { id: 7, windowId: 3, url: "https://example.com/", title: "Example", active: true, groupId: -1 };
+
+  it("marks the tab before switching to it, then focuses its window", async () => {
+    const set = vi.fn(async () => {});
+    const update = vi.fn(async () => tab);
+    const windowsUpdate = vi.fn(async () => ({}));
+    vi.stubGlobal("chrome", { storage: { session: { set } }, tabs: { update }, windows: { update: windowsUpdate } });
+    expect(await call("tabs.focus", { tabId: 7 })).toEqual({ id: "1", result: {} });
+    expect(set).toHaveBeenCalledWith({ "skip:7": expect.any(Number) });
+    expect(update).toHaveBeenCalledWith(7, { active: true });
+    expect(windowsUpdate).toHaveBeenCalledWith(3, { focused: true });
+    expect(set.mock.invocationCallOrder[0]!).toBeLessThan(update.mock.invocationCallOrder[0]!);
+  });
+});
+
 describe("mods.*", () => {
   const runtime = { id: "abc" };
 

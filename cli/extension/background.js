@@ -235,7 +235,8 @@ var shownKey = (tabId) => `shown:${tabId}`;
 var bridgeTabKey = (tabId) => `bridgeTab:${tabId}`;
 var undoKey = (tabId) => `undo:${tabId}`;
 var skipKey = (tabId) => `skip:${tabId}`;
-var tabKeys = (tabId) => [shownKey(tabId), bridgeTabKey(tabId), undoKey(tabId), skipKey(tabId)];
+var TAB_KEYS = [shownKey, bridgeTabKey, undoKey, skipKey];
+var tabKeys = (tabId) => TAB_KEYS.map((key) => key(tabId));
 function pageKey(url) {
   if (!url) return null;
   try {
@@ -373,13 +374,13 @@ async function recordOpenTabs() {
   await chrome.storage.session.set(Object.fromEntries(missing.map(({ key, url }) => [key, pageKey(url) ?? ""])));
 }
 async function tabReplaced(addedTabId, removedTabId) {
-  const added = shownKey(addedTabId);
-  const removed = shownKey(removedTabId);
-  const session = await chrome.storage.session.get([added, removed]);
-  if (session[added] === void 0 && session[removed] !== void 0) {
-    await chrome.storage.session.set({ [added]: session[removed] });
-  }
-  await chrome.storage.session.remove(tabKeys(removedTabId));
+  const pairs = TAB_KEYS.map((key) => ({ from: key(removedTabId), to: key(addedTabId) }));
+  const session = await chrome.storage.session.get(pairs.flatMap(({ from, to }) => [from, to]));
+  const carried = pairs.flatMap(
+    ({ from, to }) => session[to] === void 0 && session[from] !== void 0 ? [[to, session[from]]] : []
+  );
+  if (carried.length > 0) await chrome.storage.session.set(Object.fromEntries(carried));
+  await chrome.storage.session.remove(pairs.map(({ from }) => from));
 }
 async function offerToClose(tabId, tab) {
   const count = olderDuplicates(tab, await chrome.tabs.query({})).length;

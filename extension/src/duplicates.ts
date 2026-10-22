@@ -41,7 +41,8 @@ const shownKey = (tabId: number) => `shown:${tabId}`;
 const bridgeTabKey = (tabId: number) => `bridgeTab:${tabId}`;
 const undoKey = (tabId: number) => `undo:${tabId}`;
 const skipKey = (tabId: number) => `skip:${tabId}`;
-const tabKeys = (tabId: number) => [shownKey(tabId), bridgeTabKey(tabId), undoKey(tabId), skipKey(tabId)];
+const TAB_KEYS = [shownKey, bridgeTabKey, undoKey, skipKey];
+const tabKeys = (tabId: number) => TAB_KEYS.map((key) => key(tabId));
 
 export type TabLike = Pick<chrome.tabs.Tab, "id" | "url" | "pinned" | "incognito" | "active">;
 
@@ -272,18 +273,20 @@ async function recordOpenTabs(): Promise<void> {
   await chrome.storage.session.set(Object.fromEntries(missing.map(({ key, url }) => [key, pageKey(url) ?? ""])));
 }
 
-// Chrome may swap a tab's contents for another (a prerendered page activated,
-// say). If the new id has no record yet it gets the old id's, so the swap is
-// compared with the page the tab showed before and counts as a navigation. No
-// onRemoved fires for the old id, so its keys are dropped here.
+// Chrome may give a tab a new id: discarding it does (Memory Saver discards
+// tabs by itself), and so may activating a prerendered page. The new id takes
+// whatever the old one had that it has not got yet: the marks, so a tab Claude
+// opened stays left alone, and the record, so the reload of a discarded tab is
+// still the same page and a prerendered page swapped in counts as a
+// navigation. No onRemoved fires for the old id, so its keys are dropped here.
 async function tabReplaced(addedTabId: number, removedTabId: number): Promise<void> {
-  const added = shownKey(addedTabId);
-  const removed = shownKey(removedTabId);
-  const session = await chrome.storage.session.get([added, removed]);
-  if (session[added] === undefined && session[removed] !== undefined) {
-    await chrome.storage.session.set({ [added]: session[removed] });
-  }
-  await chrome.storage.session.remove(tabKeys(removedTabId));
+  const pairs = TAB_KEYS.map((key) => ({ from: key(removedTabId), to: key(addedTabId) }));
+  const session = await chrome.storage.session.get(pairs.flatMap(({ from, to }) => [from, to]));
+  const carried = pairs.flatMap(({ from, to }) =>
+    session[to] === undefined && session[from] !== undefined ? [[to, session[from]] as const] : [],
+  );
+  if (carried.length > 0) await chrome.storage.session.set(Object.fromEntries(carried));
+  await chrome.storage.session.remove(pairs.map(({ from }) => from));
 }
 
 async function offerToClose(tabId: number, tab: chrome.tabs.Tab): Promise<void> {

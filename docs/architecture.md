@@ -205,10 +205,13 @@ the same incognito state. Pinned tabs are never offered or closed.
   with no URL yet is skipped (before a navigation commits, Chrome may report
   an empty `url` and the target in `pendingUrl`), since recording `""` would
   make its load count as a change; it stays unseen and its load is only
-  recorded. If the new id of `tabs.onReplaced` has no record yet it gets the
-  old id's, so the swap counts as a navigation, and the old id's keys are
-  dropped, since no `onRemoved` fires for it. `tabs.onRemoved` drops
-  `shown:<id>`, `bridgeTab:<id>`, `undo:<id>` and `skip:<id>`. Records are
+  recorded. `tabs.onReplaced` (discarding a tab gives it a new id, and Memory
+  Saver discards tabs by itself) hands the old id's record and marks to the
+  new id wherever it has none yet, so a tab Claude opened stays left alone,
+  a discarded tab's reload is still the same page, and a prerendered page
+  swapped in counts as a navigation. It then drops the old id's keys, since
+  no `onRemoved` fires for it. `tabs.onRemoved` drops `shown:<id>`,
+  `bridgeTab:<id>`, `undo:<id>` and `skip:<id>`. Records are
   kept up to date whatever the action, so switching from `none` to `ask` never
   compares with stale ones.
 - **When it acts:** a load is handled on `tabs.onUpdated` with status

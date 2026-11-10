@@ -4,6 +4,15 @@ import { HostRequests, isHostReply, parseUserScriptMessage, UNSUPPORTED } from "
 const url = "https://outlook.office.com/mail/inbox/id/abc";
 
 describe("parseUserScriptMessage", () => {
+  it("passes a spawn title through, capped, and rejects a non-string one", () => {
+    const spawn = (title: unknown) => parseUserScriptMessage({ type: "claude.spawn", prompt: "x", title }, url);
+    const ok = spawn("t".repeat(300));
+    expect(ok.ok && ok.method === "claude.spawn" ? ok.params.title : "").toHaveLength(200);
+    const blank = spawn(" ");
+    expect(blank.ok && blank.method === "claude.spawn" ? blank.params.title : "x").toBeUndefined();
+    expect(spawn(5)).toEqual({ ok: false, error: "title must be a string or null" });
+  });
+
   it("accepts claude.spawn and records the sender origin", () => {
     expect(parseUserScriptMessage({ type: "claude.spawn", prompt: "Reply" }, url)).toEqual({
       ok: true,

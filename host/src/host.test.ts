@@ -297,13 +297,14 @@ describe("extension-initiated requests", () => {
     const fake = fakeOsascript(home);
     const host = await startHost(socketPath, { CHROMEFILE_OSASCRIPT: fake.path, HOME: home });
 
-    host.toHost({ id: "x-1", method: "claude.spawn", params: { prompt: "Summarize", email: { subject: "Hi", body: "b" }, origin: "https://outlook.office.com" } });
+    host.toHost({ id: "x-1", method: "claude.spawn", params: { prompt: "Summarize", email: { subject: "Hi", body: "b" }, origin: "https://outlook.office.com", title: "\u2699\ufe0f SR-1 - It's done" } });
     expect(await host.fromHost.next()).toEqual({ id: "x-1", result: {} });
     const argv = fake.argv();
-    const [cwd, file] = argv.slice(-2);
+    const [cwd, file, title] = argv.slice(-3);
     expect(cwd).toBe(project);
-    // Everything before the two trailing args is "-e <script line>" pairs.
-    const script = argv.slice(0, -2);
+    expect(title).toBe("\u2699\ufe0f SR-1 - It's done");
+    // Everything before the three trailing args is "-e <script line>" pairs.
+    const script = argv.slice(0, -3);
     expect(script.filter((_, i) => i % 2 === 0).every((flag) => flag === "-e")).toBe(true);
     expect(script.join("\n")).not.toContain(project);
     expect(script.join("\n")).not.toContain(appDir);
@@ -357,7 +358,8 @@ describe("extension-initiated requests", () => {
     expect(reply).toMatchObject({ id: "x-1", error: { code: "internal" } });
     expect(reply.error.message).toContain("boom from osascript");
     // No config and no ~/git under the fake home: falls back to home.
-    expect(fake.argv().at(-2)).toBe(home);
+    expect(fake.argv().at(-3)).toBe(home);
+    expect(fake.argv().at(-1)).toBe(""); // no title: Claude Code names the tab
     host.child.stdin.end();
     expect(await host.exited).toBe(0);
   });

@@ -16,6 +16,8 @@ export const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PROMPT = 10_000;
 const MAX_FIELD = 2_000;
 const MAX_BODY = 200_000 + 100;
+// The session name doubles as the iTerm2 tab title (`claude --name`).
+export const MAX_TITLE = 200;
 
 const HEADERS = [
   ["subject", "Subject"],
@@ -38,6 +40,8 @@ export interface SpawnParams {
   prompt: string;
   email: Email | null;
   origin: string;
+  /** iTerm2 tab title, already cleaned; absent lets Claude Code pick one. */
+  title?: string;
 }
 
 export class SpawnError extends Error {
@@ -51,7 +55,7 @@ export class SpawnError extends Error {
 
 export function parseSpawnParams(params: unknown): SpawnParams {
   if (!isObject(params)) throw new SpawnError("bad_request", "params must be an object");
-  const { prompt, email, origin } = params;
+  const { prompt, email, origin, title } = params;
   if (typeof prompt !== "string" || prompt.trim() === "") {
     throw new SpawnError("bad_request", "prompt must be a non-empty string");
   }
@@ -71,7 +75,20 @@ export function parseSpawnParams(params: unknown): SpawnParams {
       parsedEmail[key] = value;
     }
   }
-  return { prompt, email: parsedEmail, origin: origin || "an unknown origin" };
+  if (title !== undefined && title !== null && typeof title !== "string") {
+    throw new SpawnError("bad_request", "title must be a string or null");
+  }
+  return { prompt, email: parsedEmail, origin: origin || "an unknown origin", title: cleanTitle(title ?? "") || undefined };
+}
+
+/**
+ * The tab title is page-derived, so it is flattened to one printable line
+ * (no control characters to break `write text` or emit terminal escapes)
+ * and capped. It only ever reaches the shell through `quoted form of`.
+ */
+export function cleanTitle(title: string): string {
+  const flat = title.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > MAX_TITLE ? `${flat.slice(0, MAX_TITLE - 3)}...` : flat;
 }
 
 // The email is wrapped in <email> tags; a literal tag inside it must not be
@@ -163,12 +180,16 @@ function pruneSessions(sessions: string, now: number): void {
   }
 }
 
-// cwd and file arrive as argv and are only ever used through `quoted form
-// of`, so neither is interpolated into script text.
+// cwd, file and title arrive as argv and are only ever used through `quoted
+// form of`, so none of them is interpolated into script text. An empty title
+// leaves `--name` out and Claude Code picks the tab title itself.
 export const APPLESCRIPT = [
   "on run argv",
   "set targetDir to item 1 of argv",
   "set promptFile to item 2 of argv",
+  "set tabTitle to item 3 of argv",
+  'set nameFlag to ""',
+  'if tabTitle is not "" then set nameFlag to " --name " & quoted form of tabTitle',
   'tell application "iTerm2"',
   "activate",
   "if (count of windows) is 0 then",
@@ -176,7 +197,7 @@ export const APPLESCRIPT = [
   "else",
   "tell current window to create tab with default profile",
   "end if",
-  'tell current session of current window to write text ("cd " & quoted form of targetDir & " && claude \\"$(cat " & quoted form of promptFile & ")\\"")',
+  'tell current session of current window to write text ("cd " & quoted form of targetDir & " && claude" & nameFlag & " \\"$(cat " & quoted form of promptFile & ")\\"")',
   "end tell",
   "end run",
 ];
@@ -184,9 +205,9 @@ export const APPLESCRIPT = [
 // Long enough for the user to answer macOS's first-run Automation prompt.
 const OSASCRIPT_TIMEOUT_MS = 120_000;
 
-export function runOsascript(cwd: string, file: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export function runOsascript(cwd: string, file: string, title: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const binary = env.CHROMEFILE_OSASCRIPT || "/usr/bin/osascript";
-  const args = [...APPLESCRIPT.flatMap((line) => ["-e", line]), cwd, file];
+  const args = [...APPLESCRIPT.flatMap((line) => ["-e", line]), cwd, file, title];
   return new Promise((resolve, reject) => {
     execFile(binary, args, { timeout: OSASCRIPT_TIMEOUT_MS }, (error, _stdout, stderr) => {
       if (!error) return resolve();
@@ -206,6 +227,6 @@ export async function spawnClaude(params: unknown, env: NodeJS.ProcessEnv = proc
   } catch (error) {
     throw new SpawnError("internal", `Could not write the session file: ${(error as Error).message}`);
   }
-  await runOsascript(cwd, file, env);
+  await runOsascript(cwd, file, parsed.title ?? "", env);
   return { file, cwd };
 }

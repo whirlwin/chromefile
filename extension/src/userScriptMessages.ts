@@ -15,6 +15,8 @@ export const HOST_ID_PREFIX = "x-";
 const MAX_PROMPT = 10_000;
 const MAX_FIELD = 2_000;
 const MAX_BODY = 200_000;
+// The tab title for a spawned session; the host cleans it again.
+const MAX_TITLE = 200;
 const TRUNCATED = "\n[truncated]";
 const EMAIL_FIELDS = ["subject", "from", "to", "cc", "date", "body"] as const;
 const MAX_TWEET_TEXT = 4_000;
@@ -30,6 +32,7 @@ export interface SpawnParams {
   prompt: string;
   email: Email | null;
   origin: string;
+  title?: string;
 }
 
 export interface Tweet {
@@ -53,7 +56,7 @@ type Parsed =
   | { ok: false; error: string };
 
 /**
- * Accepts only `{ type: "claude.spawn", prompt, email? }` and
+ * Accepts only `{ type: "claude.spawn", prompt, email?, title? }` and
  * `{ type: "claude.draft", persona, tweet }`, with size caps.
  */
 export function parseUserScriptMessage(message: unknown, senderUrl: string | undefined): Parsed {
@@ -64,7 +67,7 @@ export function parseUserScriptMessage(message: unknown, senderUrl: string | und
 }
 
 function parseSpawn(message: Record<string, unknown>, senderUrl: string | undefined): Parsed {
-  const { prompt, email } = message;
+  const { prompt, email, title } = message;
   if (typeof prompt !== "string" || prompt.trim() === "") return { ok: false, error: "prompt must be a non-empty string" };
   if (prompt.length > MAX_PROMPT) return { ok: false, error: `prompt exceeds ${MAX_PROMPT} characters` };
   let parsedEmail: Email | null = null;
@@ -84,7 +87,10 @@ function parseSpawn(message: Record<string, unknown>, senderUrl: string | undefi
       parsedEmail[key] = value;
     }
   }
-  return { ok: true, method: "claude.spawn", params: { prompt, email: parsedEmail, origin: originOf(senderUrl) } };
+  if (title !== undefined && title !== null && typeof title !== "string") return { ok: false, error: "title must be a string or null" };
+  const params: SpawnParams = { prompt, email: parsedEmail, origin: originOf(senderUrl) };
+  if (typeof title === "string" && title.trim() !== "") params.title = title.slice(0, MAX_TITLE);
+  return { ok: true, method: "claude.spawn", params };
 }
 
 function parseDraft(message: Record<string, unknown>, senderUrl: string | undefined): Parsed {

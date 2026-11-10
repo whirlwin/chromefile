@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { APPLESCRIPT, composePrompt, parseSpawnParams, resolveCwd, SESSION_RETENTION_MS, writeSessionFile } from "./spawn";
+import { APPLESCRIPT, cleanTitle, composePrompt, parseSpawnParams, resolveCwd, SESSION_RETENTION_MS, writeSessionFile } from "./spawn";
 
 const origin = "https://outlook.office.com";
 
@@ -95,10 +95,24 @@ describe("writeSessionFile", () => {
   });
 });
 
+describe("title", () => {
+  it("is optional and dropped when blank", () => {
+    expect(parseSpawnParams({ prompt: "x" }).title).toBeUndefined();
+    expect(parseSpawnParams({ prompt: "x", title: "  " }).title).toBeUndefined();
+    expect(() => parseSpawnParams({ prompt: "x", title: 1 })).toThrow(/title/);
+  });
+
+  it("is flattened to one printable line and capped", () => {
+    expect(cleanTitle("\u2699\ufe0f SR-1 - Fix\nit\u001b]0;evil\u0007")).toBe("\u2699\ufe0f SR-1 - Fix it ]0;evil");
+    expect(cleanTitle("t".repeat(500))).toHaveLength(200);
+  });
+});
+
 describe("APPLESCRIPT", () => {
   it("takes cwd and file from argv and never embeds them", () => {
     expect(APPLESCRIPT[0]).toBe("on run argv");
     expect(APPLESCRIPT.join("\n")).toContain("quoted form of targetDir");
     expect(APPLESCRIPT.join("\n")).toContain("quoted form of promptFile");
+    expect(APPLESCRIPT.join("\n")).toContain("quoted form of tabTitle");
   });
 });

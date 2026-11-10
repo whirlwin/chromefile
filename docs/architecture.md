@@ -422,6 +422,7 @@ const reply = await chrome.runtime.sendMessage({
     subject, from, to, cc, date,                    // optional strings, 2,000 chars each
     body,                                           // optional string, truncated at 200,000 chars with "\n[truncated]"
   },
+  title: "⚙️ SR-1 - Fix login",           // optional, or null; iTerm2 tab title, cut at 200 chars
 });
 // reply: { ok: true } or { ok: false, error: "..." }
 
@@ -460,6 +461,13 @@ side and composes the prompt itself:
 | `prompt` | string, non-empty after trim (else `bad_request`)       |
 | `email`  | `{ subject?, from?, to?, cc?, date?, body? }` or `null` |
 | `origin` | string, the page origin the mod ran on                  |
+| `title`  | string or `null`, optional: the session name            |
+
+A non-blank `title` becomes `claude --name <title>`, which Claude Code shows
+as the terminal (iTerm2 tab) title. Since it comes from the page, the host
+replaces control characters with spaces, collapses it to one line and caps it
+at 200 characters; it reaches the shell only through AppleScript's `quoted
+form of`, as the third osascript argument. Without one, `--name` is left out.
 
 The composed prompt is the user's prompt, then (with an email) a block telling
 Claude the email is untrusted content from `origin` and wrapping it in
